@@ -4,15 +4,37 @@ const rateLimit = require('express-rate-limit');
 const swaggerUi = require('swagger-ui-express');
 const openapiSpec = require('./openapi.json');
 const { Pool } = require('pg');
+const fs = require('node:fs');
 require('dotenv').config();
 
 const app = express();
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+const poolOptions = process.env.DB_PASSWORD_FILE
+  ? {
+      host: process.env.PGHOST,
+      port: Number(process.env.PGPORT) || 5432,
+      database: process.env.PGDATABASE,
+      user: process.env.PGUSER,
+      password: fs.readFileSync(process.env.DB_PASSWORD_FILE, 'utf8').trimEnd()
+    }
+  : { connectionString: process.env.DATABASE_URL };
+const pool = new Pool({ ...poolOptions, max: 10, connectionTimeoutMillis: 5000, idleTimeoutMillis: 30000 });
 const port = Number(process.env.PORT) || 3000;
+let shuttingDown = false;
 
 app.disable('x-powered-by');
 app.use(helmet());
 app.use(express.json({ limit: '10kb' }));
+
+app.get('/health/live', (req, res) => res.status(200).json({ status: 'ok' }));
+app.get('/health/ready', async (req, res) => {
+  if (shuttingDown) return res.status(503).json({ status: 'not ready' });
+  try {
+    await pool.query('SELECT 1');
+    return res.status(200).json({ status: 'ok' });
+  } catch {
+    return res.status(503).json({ status: 'not ready' });
+  }
+});
 
 app.get('/openapi.json', (req, res) => res.json(openapiSpec));
 // Swagger UI uses an inline initialization script; relax CSP only for this documentation route.
@@ -79,14 +101,29 @@ app.use((error, req, res, next) => {
   return res.status(500).json({ error: 'Internal server error.' });
 });
 
-const server = app.listen(port, () => {
+const server = app.listen(port, '0.0.0.0', () => {
   console.log(`Customer API listening on port ${port}`);
 });
+server.headersTimeout = 10_000;
+server.requestTimeout = 30_000;
+server.keepAliveTimeout = 5_000;
 
+let shutdownStarted = false;
 async function shutdown() {
+  if (shutdownStarted) return;
+  shutdownStarted = true;
+  shuttingDown = true;
+  const forceExit = setTimeout(() => process.exit(1), 10_000);
+  forceExit.unref();
   server.close(async () => {
-    await pool.end();
-    process.exit(0);
+    try {
+      await pool.end();
+      clearTimeout(forceExit);
+      process.exit(0);
+    } catch (error) {
+      console.error('Shutdown failed:', error.message);
+      process.exit(1);
+    }
   });
 }
 

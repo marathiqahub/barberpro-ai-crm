@@ -1,15 +1,25 @@
 # BarberPro AI CRM
 
-A demo repository for a barber-focused CRM with a customer registration API built with Node.js, Express, and PostgreSQL. Docker Compose starts the API and database together.
+A demo repository for a barber-focused CRM with a customer registration API built with Node.js, Express, and PostgreSQL.
 
-## Run with Docker Compose
+## Docker Compose deployment
 
-1. Copy `.env.example` to `.env`.
-2. Replace `POSTGRES_PASSWORD` with a strong, unique password. Do not commit `.env`.
-3. Run `docker compose up --build -d`.
-4. Open Swagger UI at `http://localhost:3000/api-docs` or the OpenAPI document at `http://localhost:3000/openapi.json`.
+1. Install Docker Engine and the Docker Compose plugin.
+2. Copy `.env.example` to `.env` and configure the port and PostgreSQL database/user values.
+3. Create a local secret file, then replace its sample value with a long, unique random password:
 
-The API waits for PostgreSQL to pass its health check before starting. On first database initialization, PostgreSQL runs the SQL scripts in `db/migrations` automatically. The database data is stored in the `postgres_data` named volume.
+   ```sh
+   mkdir -p secrets
+   cp secrets/db_password.txt.example secrets/db_password.txt
+   chmod 600 secrets/db_password.txt
+   ```
+
+4. Start the services with `docker compose up --build -d`.
+5. Check status with `docker compose ps` and logs with `docker compose logs -f`.
+
+The API is bound to `127.0.0.1:3000` by default, suitable for a same-host reverse proxy. Set `PORT_BIND_ADDRESS` only if you intentionally need a different bind address. PostgreSQL is not published to the host. Both containers use health checks; the API waits for PostgreSQL readiness. The named database volume persists across ordinary `docker compose down` operations.
+
+The database password is mounted as a Compose secret rather than passed in the container environment. Keep `.env` and `secrets/db_password.txt` private and never commit real credentials. Compose file-backed secrets are mounted read-only but are not an encrypted secrets manager; for production on an orchestrator, use its managed secret store. Configure TLS at a trusted reverse proxy, firewall inbound access, and establish tested backup/restore and monitoring procedures.
 
 Useful commands:
 
@@ -17,32 +27,24 @@ Useful commands:
 docker compose logs -f api
 docker compose logs -f db
 docker compose down
+# Destructive: also removes the database volume and all stored data
+docker compose down -v
 ```
 
-`docker compose down` preserves the database volume. To permanently remove the database data as well, run `docker compose down -v`.
+PostgreSQL runs SQL files in `db/migrations` only when initializing an empty data volume. For subsequent schema changes, use a proper migration tool or apply migrations as a controlled deployment step; do not assume the init scripts rerun on an existing volume.
 
-PostgreSQL is not published to the host by default; the API accesses it over the private Compose network. Do not use the example password in production. For production deployments, use managed secrets, backups, and a TLS-terminating reverse proxy.
-
-## Run without Docker
+## Local development
 
 Requirements: Node.js 20+ and PostgreSQL.
 
 1. Install dependencies with `npm install`.
 2. Create a database and apply `db/migrations/001_create_customers.sql`.
-3. Set `DATABASE_URL` in `.env` to your PostgreSQL connection string.
+3. Set `DATABASE_URL` in `.env`.
 4. Start the server with `npm start` (or `npm run dev` during development).
 
-## Customer registration API
+## API
 
 `POST /api/customers` registers a customer. `name` and `email` are required; `phone` is optional. Emails are trimmed, lowercased, and unique.
-
-```json
-{
-  "name": "Alex Morgan",
-  "email": "alex@example.com",
-  "phone": "+1 555 010 1234"
-}
-```
 
 - `201 Created` — customer registered.
 - `400 Bad Request` — invalid input or malformed JSON.
@@ -50,6 +52,8 @@ Requirements: Node.js 20+ and PostgreSQL.
 - `413 Content Too Large` — request body exceeds the 10 KB limit.
 - `429 Too Many Requests` — more than 10 attempts in 15 minutes from the same client.
 - `500 Internal Server Error` — unexpected server error.
+
+Health checks: `/health/live` indicates the process is running; `/health/ready` verifies database connectivity and is used by Compose.
 
 ## API documentation
 
