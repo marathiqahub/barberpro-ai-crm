@@ -1,6 +1,8 @@
 const express = require('express');
 const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
+const swaggerUi = require('swagger-ui-express');
+const openapiSpec = require('./openapi.json');
 const { Pool } = require('pg');
 require('dotenv').config();
 
@@ -11,6 +13,14 @@ const port = Number(process.env.PORT) || 3000;
 app.disable('x-powered-by');
 app.use(helmet());
 app.use(express.json({ limit: '10kb' }));
+
+app.get('/openapi.json', (req, res) => res.json(openapiSpec));
+// Swagger UI uses an inline initialization script; relax CSP only for this documentation route.
+app.use('/api-docs', (req, res, next) => {
+  res.removeHeader('Content-Security-Policy');
+  next();
+});
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openapiSpec));
 
 app.post(
   '/api/customers',

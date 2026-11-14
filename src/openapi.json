@@ -1,0 +1,212 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "BarberPro Customer API",
+    "version": "1.0.0",
+    "description": "Customer registration API for BarberPro AI CRM."
+  },
+  "servers": [
+    {
+      "url": "/",
+      "description": "Current server"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Customers",
+      "description": "Customer registration"
+    }
+  ],
+  "paths": {
+    "/api/customers": {
+      "post": {
+        "tags": ["Customers"],
+        "summary": "Register a customer",
+        "description": "Creates a customer record. Email addresses are trimmed, lowercased, and must be unique. Limited to 10 requests per client IP in a 15-minute window.",
+        "operationId": "registerCustomer",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CustomerRegistration"
+              },
+              "example": {
+                "name": "Alex Morgan",
+                "email": "alex@example.com",
+                "phone": "+1 555 010 1234"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Customer registered successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["customer"],
+                  "properties": {
+                    "customer": {
+                      "$ref": "#/components/schemas/Customer"
+                    }
+                  }
+                },
+                "example": {
+                  "customer": {
+                    "id": "1",
+                    "name": "Alex Morgan",
+                    "email": "alex@example.com",
+                    "phone": "+1 555 010 1234",
+                    "created_at": "2026-11-14T13:58:56.000Z"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid fields or malformed JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "examples": {
+                  "validation": {
+                    "value": {
+                      "error": "Validation failed.",
+                      "details": {
+                        "email": "A valid email address is required."
+                      }
+                    }
+                  },
+                  "malformedJson": {
+                    "value": {
+                      "error": "Request body must be valid JSON."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A customer with this email already exists.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "A customer with this email already exists."
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Request body exceeds the 10 KB limit.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "Request body is too large."
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Registration rate limit exceeded (10 requests per 15 minutes)."
+          },
+          "500": {
+            "description": "Unexpected server error.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "Internal server error."
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "CustomerRegistration": {
+        "type": "object",
+        "required": ["name", "email"],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "Customer's name; whitespace is trimmed.",
+            "example": "Alex Morgan"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 254,
+            "description": "Unique email address; whitespace is trimmed and the value is stored in lowercase.",
+            "example": "alex@example.com"
+          },
+          "phone": {
+            "type": "string",
+            "minLength": 7,
+            "maxLength": 30,
+            "pattern": "^[+\\d().\\-\\s]{7,30}$",
+            "description": "Optional phone number containing digits or common phone-number characters.",
+            "example": "+1 555 010 1234"
+          }
+        }
+      },
+      "Customer": {
+        "type": "object",
+        "required": ["id", "name", "email", "phone", "created_at"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Database-generated customer ID."
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "phone": {
+            "type": "string",
+            "nullable": true
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "details": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}
