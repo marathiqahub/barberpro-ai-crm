@@ -1,17 +1,49 @@
 # BarberPro AI CRM
 
-A demo repository for a barber-focused CRM with AI-assisted workflows.
+A demo repository for a barber-focused CRM with AI-assisted workflows. This repository includes a customer registration API built with Node.js, Express, and PostgreSQL.
 
-## Overview
+## Customer registration API
 
-This repository is intentionally initialized as a starter project scaffold for a CRM platform tailored to barber businesses.
+### Requirements
 
-## Getting Started
+- Node.js 20 or newer
+- PostgreSQL
 
-1. Clone the repository.
-2. Create your feature branches.
-3. Start building the application.
+### Setup
 
-## License
+1. Install dependencies with `npm install`.
+2. Create a PostgreSQL database, then apply `db/migrations/001_create_customers.sql`.
+3. Copy `.env.example` to `.env` and set `DATABASE_URL` to your database connection string.
+4. Start the server with `npm start` (or `npm run dev` during development).
 
-This project is for demo purposes.
+The API listens on port `3000` by default; set `PORT` to change it.
+
+### `POST /api/customers`
+
+Register a customer by sending JSON:
+
+```json
+{
+  "name": "Alex Morgan",
+  "email": "alex@example.com",
+  "phone": "+1 555 010 1234"
+}
+```
+
+`name` and `email` are required. `phone` is optional. Email addresses are normalized to lowercase and must be unique.
+
+- `201 Created` — customer registered; returns the customer record.
+- `400 Bad Request` — invalid input or malformed JSON.
+- `409 Conflict` — an account with that email already exists.
+- `413 Content Too Large` — request body exceeds the 10 KB limit.
+- `429 Too Many Requests` — more than 10 registration attempts in 15 minutes from the same client.
+
+Example:
+
+```sh
+curl -X POST http://localhost:3000/api/customers \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Alex Morgan","email":"alex@example.com"}'
+```
+
+Use HTTPS in production, keep database credentials secret, and configure appropriate access controls and abuse monitoring before exposing the API publicly.
