@@ -35,7 +35,8 @@ test('rejects using a refresh token as an access token and vice versa', () => {
 
 test('detects token tampering and stores a one-way refresh-token digest', () => {
   const pair = tokenService.issueTokenPair({ id: 8, role: 'ADMIN' });
-  const tampered = pair.refreshToken.slice(0, -1) + (pair.refreshToken.endsWith('a') ? 'b' : 'a');
+  const [header, payload, signature] = pair.refreshToken.split('.');
+  const tampered = [header, payload, (signature[0] === 'A' ? 'B' : 'A') + signature.slice(1)].join('.');
 
   assert.throws(() => tokenService.verifyRefreshToken(tampered));
   assert.match(pair.refreshTokenHash, /^[a-f0-9]{64}$/);
