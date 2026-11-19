@@ -1,13 +1,13 @@
 const fs = require('node:fs');
 
 function readSecret(name) {
-  const filePath = process.env[\`\${name}_FILE\`];
+  const filePath = process.env[`${name}_FILE`];
   const value = filePath
     ? fs.readFileSync(filePath, 'utf8').trim()
     : process.env[name];
 
   if (!value || Buffer.byteLength(value, 'utf8') < 32) {
-    throw new Error(\`\${name} must be configured and contain at least 32 bytes.\`);
+    throw new Error(`${name} must be configured and contain at least 32 bytes.`);
   }
   return value;
 }
