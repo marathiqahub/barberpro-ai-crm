@@ -1,6 +1,9 @@
 const argon2 = require('argon2');
 const { createTokenService } = require('../auth/tokens');
 
+const passwordHashOptions = { type: argon2.argon2id, memoryCost: 19456, timeCost: 2, parallelism: 1 };
+const dummyPasswordHashPromise = argon2.hash('not-a-real-user-password-for-timing-equalization', passwordHashOptions);
+
 function createAuthController(pool, authConfig) {
   const tokens = createTokenService(authConfig);
 
@@ -86,7 +89,9 @@ function createAuthController(pool, authConfig) {
         [normalizedEmail]
       );
       const user = found.rows[0];
-      if (!user || !user.is_active || !(await argon2.verify(user.password_hash, password))) {
+      const hashToVerify = user ? user.password_hash : await dummyPasswordHashPromise;
+      const passwordMatches = await argon2.verify(hashToVerify, password);
+      if (!user || !user.is_active || !passwordMatches) {
         return res.status(401).json({ error: 'Invalid email or password.' });
       }
 
