@@ -46,7 +46,7 @@ function createTokenService(config) {
       issuer: config.issuer,
       audience: config.audience
     });
-    if (claims.tokenUse !== 'access') throw new Error('Wrong token type.');
+    if (claims.tokenUse !== 'access' || !claims.familyId) throw new Error('Wrong token type or missing session family.');
     return claims;
   }
 
