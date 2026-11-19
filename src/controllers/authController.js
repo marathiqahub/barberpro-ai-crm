@@ -79,7 +79,7 @@ function createAuthController(pool, authConfig) {
   async function login(req, res, next) {
     const { email, password } = req.body ?? {};
     const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
-    if (!normalizedEmail || typeof password !== 'string' || password.length > 128) {
+    if (!normalizedEmail || normalizedEmail.length > 254 || typeof password !== 'string' || password.length > 128) {
       return res.status(401).json({ error: 'Invalid email or password.' });
     }
 
