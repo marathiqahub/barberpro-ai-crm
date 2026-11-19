@@ -35,8 +35,14 @@ services:
       PGDATABASE: ${POSTGRES_DB:-barberpro}
       PGUSER: ${POSTGRES_USER:-barberpro}
       DB_PASSWORD_FILE: /run/secrets/db_password
+      JWT_ACCESS_SECRET_FILE: /run/secrets/jwt_access_secret
+      JWT_REFRESH_SECRET_FILE: /run/secrets/jwt_refresh_secret
+      JWT_ISSUER: ${JWT_ISSUER:-barberpro-ai-crm}
+      JWT_AUDIENCE: ${JWT_AUDIENCE:-barberpro-api}
     secrets:
       - db_password
+      - jwt_access_secret
+      - jwt_refresh_secret
     ports:
       - "${PORT_BIND_ADDRESS:-127.0.0.1}:${PORT:-3000}:3000"
     depends_on:
@@ -65,3 +71,7 @@ volumes:
 secrets:
   db_password:
     file: ${POSTGRES_PASSWORD_FILE:-./secrets/db_password.txt}
+  jwt_access_secret:
+    file: ${JWT_ACCESS_SECRET_FILE:-./secrets/jwt_access_secret.txt}
+  jwt_refresh_secret:
+    file: ${JWT_REFRESH_SECRET_FILE:-./secrets/jwt_refresh_secret.txt}

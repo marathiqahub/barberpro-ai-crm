@@ -1,21 +1,25 @@
 {
   "name": "barberpro-customer-api",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
-  "description": "Customer registration API for BarberPro AI CRM",
+  "description": "BarberPro AI CRM customer registration and authentication API",
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "node --watch src/server.js"
+    "dev": "node --watch src/server.js",
+    "test": "node --test",
+    "check": "node --check src/server.js && node --check src/auth/config.js && node --check src/auth/tokens.js && node --check src/auth/middleware.js && node --check src/controllers/authController.js && node --check src/routes/authRoutes.js"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "argon2": "^0.41.1",
     "dotenv": "^16.4.7",
     "express": "^4.21.2",
     "express-rate-limit": "^7.5.0",
     "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
     "pg": "^8.13.1",
     "swagger-ui-express": "^5.0.1"
   }

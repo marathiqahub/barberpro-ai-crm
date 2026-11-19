@@ -1,9 +1,9 @@
 {
   "openapi": "3.0.3",
   "info": {
-    "title": "BarberPro Customer API",
-    "version": "1.0.0",
-    "description": "Customer registration API for BarberPro AI CRM."
+    "title": "BarberPro AI CRM API",
+    "version": "1.1.0",
+    "description": "Customer registration and account authentication API for BarberPro AI CRM."
   },
   "servers": [
     {
@@ -13,17 +13,259 @@
   ],
   "tags": [
     {
+      "name": "Authentication",
+      "description": "Account registration, login, token rotation, and profile"
+    },
+    {
       "name": "Customers",
       "description": "Customer registration"
     }
   ],
   "paths": {
+    "/api/auth/register": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Register a customer account",
+        "operationId": "registerAccount",
+        "description": "Creates a CUSTOMER account. Public registration cannot assign privileged roles. Passwords are hashed with Argon2id.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Account created and token pair issued.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Email is already registered.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Registration rate limit exceeded."
+          },
+          "500": {
+            "description": "Unexpected server error."
+          }
+        }
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Log in",
+        "operationId": "login",
+        "description": "Verifies credentials and issues an access JWT and refresh JWT.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authenticated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid email or password.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Login rate limit exceeded."
+          },
+          "500": {
+            "description": "Unexpected server error."
+          }
+        }
+      }
+    },
+    "/api/auth/refresh": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Rotate refresh token",
+        "operationId": "refreshTokens",
+        "description": "Consumes a valid refresh JWT once and returns a new token pair. Reuse of a revoked refresh token revokes its token family.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Token pair rotated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Refresh token is required.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Refresh token invalid, expired, or reused.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Token request rate limit exceeded."
+          }
+        }
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Log out",
+        "operationId": "logout",
+        "description": "Revokes all refresh tokens in the supplied token family. This endpoint is idempotent.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Session revoked or already invalid."
+          },
+          "429": {
+            "description": "Token request rate limit exceeded."
+          }
+        }
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "tags": [
+          "Authentication"
+        ],
+        "summary": "Get current user",
+        "operationId": "getCurrentUser",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current active user.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "user"
+                  ],
+                  "properties": {
+                    "user": {
+                      "$ref": "#/components/schemas/User"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing, invalid, or expired access token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Unexpected server error."
+          }
+        }
+      }
+    },
     "/api/customers": {
       "post": {
-        "tags": ["Customers"],
+        "tags": [
+          "Customers"
+        ],
         "summary": "Register a customer",
-        "description": "Creates a customer record. Email addresses are trimmed, lowercased, and must be unique. Limited to 10 requests per client IP in a 15-minute window.",
         "operationId": "registerCustomer",
+        "description": "Creates a customer record independently of login accounts. Email addresses are trimmed, lowercased, and must be unique. Limited to 10 requests per client IP in a 15-minute window.",
         "requestBody": {
           "required": true,
           "content": {
@@ -46,7 +288,9 @@
               "application/json": {
                 "schema": {
                   "type": "object",
-                  "required": ["customer"],
+                  "required": [
+                    "customer"
+                  ],
                   "properties": {
                     "customer": {
                       "$ref": "#/components/schemas/Customer"
@@ -71,21 +315,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
-                },
-                "examples": {
-                  "validation": {
-                    "value": {
-                      "error": "Validation failed.",
-                      "details": {
-                        "email": "A valid email address is required."
-                      }
-                    }
-                  },
-                  "malformedJson": {
-                    "value": {
-                      "error": "Request body must be valid JSON."
-                    }
-                  }
                 }
               }
             }
@@ -96,9 +325,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
-                },
-                "example": {
-                  "error": "A customer with this email already exists."
                 }
               }
             }
@@ -109,9 +335,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
-                },
-                "example": {
-                  "error": "Request body is too large."
                 }
               }
             }
@@ -125,9 +348,6 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Error"
-                },
-                "example": {
-                  "error": "Internal server error."
                 }
               }
             }
@@ -137,10 +357,167 @@
     }
   },
   "components": {
+    "securitySchemes": {
+      "BearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT",
+        "description": "Use the access token returned by /api/auth/register or /api/auth/login."
+      }
+    },
     "schemas": {
+      "RegisterRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "email",
+          "password"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "example": "Alex Morgan"
+          },
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 254,
+            "example": "alex@example.com"
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "minLength": 12,
+            "maxLength": 128,
+            "example": "a-long-unique-password"
+          }
+        }
+      },
+      "LoginRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "email": {
+            "type": "string",
+            "format": "email",
+            "maxLength": 254
+          },
+          "password": {
+            "type": "string",
+            "format": "password",
+            "maxLength": 128
+          }
+        }
+      },
+      "RefreshRequest": {
+        "type": "object",
+        "required": [
+          "refreshToken"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "refreshToken": {
+            "type": "string",
+            "description": "The latest refresh JWT. It is single-use and is replaced on successful rotation."
+          }
+        }
+      },
+      "AuthResponse": {
+        "type": "object",
+        "required": [
+          "user",
+          "tokens"
+        ],
+        "properties": {
+          "user": {
+            "$ref": "#/components/schemas/User"
+          },
+          "tokens": {
+            "$ref": "#/components/schemas/TokenPair"
+          }
+        }
+      },
+      "TokenPair": {
+        "type": "object",
+        "required": [
+          "accessToken",
+          "refreshToken",
+          "tokenType",
+          "expiresIn",
+          "refreshExpiresAt"
+        ],
+        "properties": {
+          "accessToken": {
+            "type": "string",
+            "description": "Signed access JWT; valid for 15 minutes."
+          },
+          "refreshToken": {
+            "type": "string",
+            "description": "Signed refresh JWT; valid for 7 days and rotated on use."
+          },
+          "tokenType": {
+            "type": "string",
+            "enum": [
+              "Bearer"
+            ]
+          },
+          "expiresIn": {
+            "type": "integer",
+            "example": 900
+          },
+          "refreshExpiresAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "User": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "email",
+          "role"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "1"
+          },
+          "name": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string",
+            "format": "email"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "ADMIN",
+              "BARBER",
+              "CUSTOMER"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
       "CustomerRegistration": {
         "type": "object",
-        "required": ["name", "email"],
+        "required": [
+          "name",
+          "email"
+        ],
         "additionalProperties": false,
         "properties": {
           "name": {
@@ -154,14 +531,14 @@
             "type": "string",
             "format": "email",
             "maxLength": 254,
-            "description": "Unique email address; whitespace is trimmed and the value is stored in lowercase.",
+            "description": "Unique email address; whitespace is trimmed and stored lowercase.",
             "example": "alex@example.com"
           },
           "phone": {
             "type": "string",
             "minLength": 7,
             "maxLength": 30,
-            "pattern": "^[+\\d().\\-\\s]{7,30}$",
+            "pattern": "^[+\\\\d().\\\\-\\\\s]{7,30}$",
             "description": "Optional phone number containing digits or common phone-number characters.",
             "example": "+1 555 010 1234"
           }
@@ -169,7 +546,13 @@
       },
       "Customer": {
         "type": "object",
-        "required": ["id", "name", "email", "phone", "created_at"],
+        "required": [
+          "id",
+          "name",
+          "email",
+          "phone",
+          "created_at"
+        ],
         "properties": {
           "id": {
             "type": "string",
@@ -194,7 +577,9 @@
       },
       "Error": {
         "type": "object",
-        "required": ["error"],
+        "required": [
+          "error"
+        ],
         "properties": {
           "error": {
             "type": "string"

@@ -1,6 +1,7 @@
 # Keep credentials and local environment files out of source control.
 .env
-secrets/db_password.txt
+secrets/*.txt
+!secrets/*.txt.example
 node_modules/
 *.log
 .DS_Store
