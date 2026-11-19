@@ -59,7 +59,7 @@ All authentication endpoints are under `/api/auth`.
 | POST | `/logout` | Revoke the refresh-token family |
 | GET | `/me` | Return the authenticated user's profile |
 
-Registration accepts `name`, `email`, and `password`. Passwords must be 12–128 characters. New public registrations always receive the `CUSTOMER` role; the client cannot self-assign ADMIN or BARBER. Provision staff accounts through a trusted administrative process. Roles supported by the authorization middleware are `ADMIN`, `BARBER`, and `CUSTOMER`.
+Registration accepts `name`, `email`, and `password`. Passwords must be 12–128 characters. New public registrations always receive the `CUSTOMER` role; the client cannot self-assign ADMIN or BARBER. Provision staff accounts through a trusted administrative process (for example, have an authorized operator create the user and set its role in a controlled admin workflow; never expose role assignment on public registration). Roles supported by the authorization middleware are `ADMIN`, `BARBER`, and `CUSTOMER`.
 
 Passwords are hashed with Argon2id. Access JWTs expire after 15 minutes. Refresh JWTs expire after 7 days, are stored in the database only as SHA-256 hashes, rotate on every successful refresh, and share a family identifier so replay of a revoked token revokes the active family. Access JWTs are bound to that family too, and middleware checks the family is still active, so logout and detected refresh-token replay invalidate access tokens immediately. Access and refresh JWTs use different secrets and are verified with a fixed HS256 algorithm, issuer, and audience. Tokens contain identifiers and role metadata only; do not put secrets or sensitive personal data in JWT claims.
 
