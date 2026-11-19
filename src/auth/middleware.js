@@ -15,8 +15,15 @@ function createAuthMiddleware(pool, tokenService) {
 
     try {
       const result = await pool.query(
-        'SELECT id, name, email, role FROM users WHERE id = $1 AND is_active = TRUE',
-        [claims.sub]
+        `SELECT u.id, u.name, u.email, u.role
+         FROM users u
+         WHERE u.id = $1 AND u.is_active = TRUE
+           AND EXISTS (
+             SELECT 1 FROM refresh_tokens rt
+             WHERE rt.user_id = u.id AND rt.family_id = $2
+               AND rt.revoked_at IS NULL AND rt.expires_at > NOW()
+           )`,
+        [claims.sub, claims.familyId]
       );
       if (!result.rowCount) {
         return res.status(401).json({ error: 'Authentication is no longer valid.' });
