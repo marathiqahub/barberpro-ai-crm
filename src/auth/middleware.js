@@ -6,8 +6,14 @@ function createAuthMiddleware(pool, tokenService) {
       return res.status(401).json({ error: 'A valid Bearer access token is required.' });
     }
 
+    let claims;
     try {
-      const claims = tokenService.verifyAccessToken(match[1]);
+      claims = tokenService.verifyAccessToken(match[1]);
+    } catch {
+      return res.status(401).json({ error: 'Invalid or expired access token.' });
+    }
+
+    try {
       const result = await pool.query(
         'SELECT id, name, email, role FROM users WHERE id = $1 AND is_active = TRUE',
         [claims.sub]
@@ -17,8 +23,8 @@ function createAuthMiddleware(pool, tokenService) {
       }
       req.user = result.rows[0];
       return next();
-    } catch {
-      return res.status(401).json({ error: 'Invalid or expired access token.' });
+    } catch (error) {
+      return next(error);
     }
   }
 
