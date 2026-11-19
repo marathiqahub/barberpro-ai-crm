@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node src/server.js",
     "dev": "node --watch src/server.js",
-    "test": "node --test"
+    "test": "node --test",
+    "check": "node --check src/server.js && node --check src/auth/config.js && node --check src/auth/tokens.js && node --check src/auth/middleware.js && node --check src/controllers/authController.js && node --check src/routes/authRoutes.js"
   },
   "engines": {
     "node": ">=20"
