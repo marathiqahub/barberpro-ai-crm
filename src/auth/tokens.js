@@ -4,7 +4,7 @@ const jwt = require('jsonwebtoken');
 function createTokenService(config) {
   function issueTokenPair(user, familyId = crypto.randomUUID()) {
     const accessToken = jwt.sign(
-      { role: user.role, tokenUse: 'access' },
+      { role: user.role, tokenUse: 'access', familyId },
       config.accessSecret,
       {
         algorithm: 'HS256',
