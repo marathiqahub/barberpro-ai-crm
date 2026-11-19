@@ -3,6 +3,7 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const swaggerUi = require('swagger-ui-express');
 const openapiSpec = require('./openapi.json');
+const { createAuthRouter } = require('./routes/authRoutes');
 const { Pool } = require('pg');
 const fs = require('node:fs');
 require('dotenv').config();
@@ -43,6 +44,8 @@ app.use('/api-docs', (req, res, next) => {
   next();
 });
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openapiSpec));
+
+app.use('/api/auth', createAuthRouter(pool));
 
 app.post(
   '/api/customers',
@@ -102,7 +105,7 @@ app.use((error, req, res, next) => {
 });
 
 const server = app.listen(port, '0.0.0.0', () => {
-  console.log(`Customer API listening on port ${port}`);
+  console.log(`BarberPro API listening on port ${port}`);
 });
 server.headersTimeout = 10_000;
 server.requestTimeout = 30_000;
