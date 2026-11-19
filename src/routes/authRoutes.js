@@ -10,6 +10,12 @@ function createAuthRouter(pool) {
   const controller = createAuthController(pool, config);
   const { authenticate } = createAuthMiddleware(pool, controller.tokens);
 
+  router.use((req, res, next) => {
+    res.set('Cache-Control', 'no-store');
+    res.set('Pragma', 'no-cache');
+    return next();
+  });
+
   const registerLimiter = rateLimit({
     windowMs: 60 * 60 * 1000,
     limit: 5,
