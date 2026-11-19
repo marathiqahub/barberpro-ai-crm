@@ -19,6 +19,7 @@ test('issues distinct access and refresh JWTs with the expected claims', () => {
   assert.equal(access.sub, '42');
   assert.equal(access.role, 'CUSTOMER');
   assert.equal(access.tokenUse, 'access');
+  assert.equal(access.familyId, pair.familyId);
   assert.equal(refresh.sub, '42');
   assert.equal(refresh.tokenUse, 'refresh');
   assert.equal(refresh.jti, pair.refreshId);
