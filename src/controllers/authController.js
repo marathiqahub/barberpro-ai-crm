@@ -137,7 +137,7 @@ function createAuthController(pool, authConfig) {
         [claims.jti, claims.sub]
       );
       const current = found.rows[0];
-      if (!current || current.token_hash !== tokens.hashToken(refreshToken)) {
+      if (!current || current.family_id !== claims.familyId || current.token_hash !== tokens.hashToken(refreshToken)) {
         await client.query('ROLLBACK');
         return res.status(401).json({ error: 'Invalid or expired refresh token.' });
       }
