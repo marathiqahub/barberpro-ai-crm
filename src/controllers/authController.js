@@ -16,8 +16,8 @@ function createAuthController(pool, authConfig) {
 
   async function saveRefreshToken(client, userId, pair) {
     await client.query(
-      \`INSERT INTO refresh_tokens (id, user_id, family_id, token_hash, expires_at)
-       VALUES ($1, $2, $3, $4, $5)\`,
+      `INSERT INTO refresh_tokens (id, user_id, family_id, token_hash, expires_at)
+       VALUES ($1, $2, $3, $4, $5)`,
       [pair.refreshId, userId, pair.familyId, pair.refreshTokenHash, pair.refreshExpiresAt]
     );
   }
@@ -31,7 +31,7 @@ function createAuthController(pool, authConfig) {
     if (!normalizedName || normalizedName.length > 120) {
       errors.name = 'Name is required and must be at most 120 characters.';
     }
-    if (normalizedEmail.length > 254 || !/^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(normalizedEmail)) {
+    if (normalizedEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
       errors.email = 'A valid email address is required.';
     }
     if (typeof password !== 'string' || password.length < 12 || password.length > 128) {
@@ -41,8 +41,9 @@ function createAuthController(pool, authConfig) {
       return res.status(400).json({ error: 'Validation failed.', details: errors });
     }
 
-    const client = await pool.connect();
+    let client;
     try {
+      client = await pool.connect();
       await client.query('BEGIN');
       const passwordHash = await argon2.hash(password, {
         type: argon2.argon2id,
@@ -51,9 +52,9 @@ function createAuthController(pool, authConfig) {
         parallelism: 1
       });
       const inserted = await client.query(
-        \`INSERT INTO users (name, email, password_hash, role)
+        `INSERT INTO users (name, email, password_hash, role)
          VALUES ($1, $2, $3, 'CUSTOMER')
-         RETURNING id, name, email, role\`,
+         RETURNING id, name, email, role`,
         [normalizedName, normalizedEmail, passwordHash]
       );
       const user = inserted.rows[0];
@@ -62,13 +63,13 @@ function createAuthController(pool, authConfig) {
       await client.query('COMMIT');
       return res.status(201).json({ user, tokens: tokenResponse(pair) });
     } catch (error) {
-      await client.query('ROLLBACK');
+      if (client) await client.query('ROLLBACK').catch(() => {});
       if (error.code === '23505') {
         return res.status(409).json({ error: 'An account with this email already exists.' });
       }
       return next(error);
     } finally {
-      client.release();
+      if (client) client.release();
     }
   }
 
@@ -91,8 +92,8 @@ function createAuthController(pool, authConfig) {
 
       const pair = tokens.issueTokenPair(user);
       await pool.query(
-        \`INSERT INTO refresh_tokens (id, user_id, family_id, token_hash, expires_at)
-         VALUES ($1, $2, $3, $4, $5)\`,
+        `INSERT INTO refresh_tokens (id, user_id, family_id, token_hash, expires_at)
+         VALUES ($1, $2, $3, $4, $5)`,
         [pair.refreshId, user.id, pair.familyId, pair.refreshTokenHash, pair.refreshExpiresAt]
       );
       return res.status(200).json({
@@ -117,16 +118,17 @@ function createAuthController(pool, authConfig) {
       return res.status(401).json({ error: 'Invalid or expired refresh token.' });
     }
 
-    const client = await pool.connect();
+    let client;
     try {
+      client = await pool.connect();
       await client.query('BEGIN');
       const found = await client.query(
-        \`SELECT rt.id, rt.user_id, rt.family_id, rt.token_hash, rt.expires_at,
+        `SELECT rt.id, rt.user_id, rt.family_id, rt.token_hash, rt.expires_at,
                 rt.revoked_at, u.name, u.email, u.role, u.is_active
          FROM refresh_tokens rt
          JOIN users u ON u.id = rt.user_id
          WHERE rt.id = $1 AND rt.user_id = $2
-         FOR UPDATE OF rt\`,
+         FOR UPDATE OF rt`,
         [claims.jti, claims.sub]
       );
       const current = found.rows[0];
@@ -161,10 +163,10 @@ function createAuthController(pool, authConfig) {
       await client.query('COMMIT');
       return res.status(200).json({ user, tokens: tokenResponse(pair) });
     } catch (error) {
-      await client.query('ROLLBACK');
+      if (client) await client.query('ROLLBACK').catch(() => {});
       return next(error);
     } finally {
-      client.release();
+      if (client) client.release();
     }
   }
 
@@ -173,27 +175,31 @@ function createAuthController(pool, authConfig) {
     if (typeof refreshToken !== 'string' || !refreshToken) {
       return res.status(204).end();
     }
+
+    let claims;
     try {
-      const claims = tokens.verifyRefreshToken(refreshToken, true);
+      claims = tokens.verifyRefreshToken(refreshToken, true);
+    } catch {
+      return res.status(204).end();
+    }
+    try {
       await pool.query(
-        \`UPDATE refresh_tokens
+        `UPDATE refresh_tokens
          SET revoked_at = COALESCE(revoked_at, NOW())
-         WHERE family_id = $1 AND user_id = $2\`,
+         WHERE family_id = $1 AND user_id = $2`,
         [claims.familyId, claims.sub]
       );
+      return res.status(204).end();
     } catch (error) {
-      if (error.name !== 'JsonWebTokenError' && error.name !== 'TokenExpiredError' && error.name !== 'NotBeforeError') {
-        return next(error);
-      }
+      return next(error);
     }
-    return res.status(204).end();
   }
 
   async function me(req, res, next) {
     try {
       const result = await pool.query(
-        \`SELECT id, name, email, role, created_at
-         FROM users WHERE id = $1 AND is_active = TRUE\`,
+        `SELECT id, name, email, role, created_at
+         FROM users WHERE id = $1 AND is_active = TRUE`,
         [req.user.id]
       );
       if (!result.rowCount) return res.status(404).json({ error: 'User not found.' });
