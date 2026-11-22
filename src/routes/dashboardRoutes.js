@@ -56,9 +56,9 @@ function createDashboardRouter(pool, tokenService) {
          (SELECT COUNT(*)::int FROM appointments WHERE starts_at >= $1::date AND starts_at < ($2::date + 1) AND status = 'COMPLETED') AS completed,
          (SELECT COUNT(*)::int FROM appointments WHERE starts_at >= $1::date AND starts_at < ($2::date + 1) AND status = 'CANCELLED') AS cancelled,
          (SELECT COUNT(*)::int FROM appointments WHERE starts_at >= $1::date AND starts_at < ($2::date + 1) AND status = 'NO_SHOW') AS no_shows,
-         (SELECT COALESCE(SUM(s.price), 0)::numeric(12,2)
-            FROM appointments a JOIN services s ON s.id = a.service_id
-           WHERE a.starts_at >= $1::date AND a.starts_at < ($2::date + 1) AND a.status = 'COMPLETED') AS gross_revenue`,
+         (SELECT COALESCE(SUM(p.amount_paise), 0)::bigint
+            FROM payments p JOIN appointments a ON a.id=p.appointment_id
+           WHERE a.starts_at >= $1::date AND a.starts_at < ($2::date + 1) AND p.status = 'CAPTURED') AS captured_revenue_paise`,
       [from, to]
     );
     const shops = await pool.query(
@@ -117,14 +117,14 @@ function createDashboardRouter(pool, tokenService) {
     if (!period) return;
     const result = await pool.query(
       `SELECT sh.id AS shop_id, sh.name AS shop_name, st.id AS staff_id, st.display_name,
-              COUNT(a.id)::int AS appointments,
-              COUNT(a.id) FILTER (WHERE a.status = 'COMPLETED')::int AS completed,
-              COUNT(a.id) FILTER (WHERE a.status = 'NO_SHOW')::int AS no_shows,
-              COALESCE(SUM(s.price) FILTER (WHERE a.status = 'COMPLETED'),0)::numeric(12,2) AS revenue
+              COUNT(DISTINCT a.id)::int AS appointments,
+              COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'COMPLETED')::int AS completed,
+              COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'NO_SHOW')::int AS no_shows,
+              COALESCE(SUM(p.amount_paise) FILTER (WHERE p.status = 'CAPTURED'),0)::bigint AS captured_revenue_paise
        FROM shop_staff st JOIN shops sh ON sh.id = st.shop_id
        LEFT JOIN appointments a ON a.staff_id = st.id
          AND a.starts_at >= $1::date AND a.starts_at < ($2::date + 1)
-       LEFT JOIN services s ON s.id = a.service_id
+       LEFT JOIN payments p ON p.appointment_id = a.id
        GROUP BY sh.id, sh.name, st.id, st.display_name ORDER BY sh.name, revenue DESC, st.display_name`,
       [period.from, period.to]
     );
@@ -136,14 +136,14 @@ function createDashboardRouter(pool, tokenService) {
     if (!period) return;
     const result = await pool.query(
       `SELECT sh.id AS shop_id, sh.name AS shop_name,
-              COUNT(a.id)::int AS total_appointments,
-              COUNT(a.id) FILTER (WHERE a.status = 'COMPLETED')::int AS completed,
-              COUNT(a.id) FILTER (WHERE a.status = 'CANCELLED')::int AS cancelled,
-              COUNT(a.id) FILTER (WHERE a.status = 'NO_SHOW')::int AS no_shows,
-              COALESCE(SUM(s.price) FILTER (WHERE a.status = 'COMPLETED'),0)::numeric(12,2) AS revenue
+              COUNT(DISTINCT a.id)::int AS total_appointments,
+              COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'COMPLETED')::int AS completed,
+              COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'CANCELLED')::int AS cancelled,
+              COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'NO_SHOW')::int AS no_shows,
+              COALESCE(SUM(p.amount_paise) FILTER (WHERE p.status = 'CAPTURED'),0)::bigint AS captured_revenue_paise
        FROM shops sh LEFT JOIN appointments a ON a.shop_id = sh.id
          AND a.starts_at >= $1::date AND a.starts_at < ($2::date + 1)
-       LEFT JOIN services s ON s.id = a.service_id
+       LEFT JOIN payments p ON p.appointment_id = a.id
        GROUP BY sh.id, sh.name ORDER BY sh.name`,
       [period.from, period.to]
     );
@@ -211,6 +211,8 @@ function createDashboardRouter(pool, tokenService) {
   router.get('/barber/appointments', ...barber, asyncRoute(async (req, res) => {
     const period = range(req, res);
     if (!period) return;
+    const shopId = req.query.shopId === undefined ? null : id(req.query.shopId);
+    if (req.query.shopId !== undefined && !shopId) return res.status(400).json({ error: 'shopId must be a positive integer.' });
     const result = await pool.query(
       `SELECT a.id,a.starts_at,a.ends_at,a.status,a.customer_notes,
               u.id AS customer_id,u.name AS customer_name,u.email AS customer_email,
@@ -220,8 +222,9 @@ function createDashboardRouter(pool, tokenService) {
        JOIN users u ON u.id=a.customer_id
        WHERE st.user_id=$1 AND st.is_active=TRUE
          AND a.starts_at >= $2::date AND a.starts_at < ($3::date + 1)
+         AND ($4::bigint IS NULL OR st.shop_id=$4)
        ORDER BY a.starts_at`,
-      [req.user.id, period.from, period.to]
+      [req.user.id, period.from, period.to, shopId]
     );
     res.json({ period, appointments: result.rows });
   }));
