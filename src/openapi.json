@@ -605,6 +605,30 @@
             }
           }
         }
+      },
+      "get": {
+        "tags": [
+          "Booking"
+        ],
+        "summary": "List active barbers for customer selection",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "shopId",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active shop barbers and eligible service assignments"
+          },
+          "400": {
+            "description": "Invalid shop id"
+          }
+        }
       }
     },
     "/api/staff/{staffId}/hours": {
@@ -874,6 +898,463 @@
             }
           }
         ]
+      }
+    },
+    "/api/admin/dashboard": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Cross-shop dashboard metrics",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Shop totals, appointment outcomes and completed-service revenue"
+          },
+          "403": {
+            "description": "ADMIN role required"
+          }
+        }
+      }
+    },
+    "/api/admin/shops": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List all shops and catalogue counts",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Shop list"
+          }
+        }
+      }
+    },
+    "/api/admin/shops/{shopId}": {
+      "patch": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Update shop profile or active state",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "shopId",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "address": {
+                    "type": "string"
+                  },
+                  "phone": {
+                    "type": "string"
+                  },
+                  "timezone": {
+                    "type": "string"
+                  },
+                  "isActive": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated shop"
+          },
+          "400": {
+            "description": "Invalid update"
+          },
+          "404": {
+            "description": "Shop not found"
+          }
+        }
+      }
+    },
+    "/api/admin/staff-performance": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Staff performance by shop",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Appointment outcomes and completed-service revenue by barber"
+          }
+        }
+      }
+    },
+    "/api/admin/reports": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Shop appointment and revenue report",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Shop-level report"
+          }
+        }
+      }
+    },
+    "/api/admin/services": {
+      "get": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "List services across all shops",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Service catalogue"
+          }
+        }
+      }
+    },
+    "/api/admin/services/{serviceId}": {
+      "patch": {
+        "tags": [
+          "Admin"
+        ],
+        "summary": "Update service details or active state",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "durationMinutes": {
+                    "type": "integer",
+                    "minimum": 5,
+                    "maximum": 240
+                  },
+                  "price": {
+                    "type": "number",
+                    "minimum": 0
+                  },
+                  "isActive": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated service"
+          },
+          "400": {
+            "description": "Invalid update"
+          },
+          "404": {
+            "description": "Service not found"
+          }
+        }
+      }
+    },
+    "/api/barber/dashboard": {
+      "get": {
+        "tags": [
+          "Barber"
+        ],
+        "summary": "Barber dashboard and upcoming appointments",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Own shop metrics and assigned upcoming appointments"
+          },
+          "403": {
+            "description": "BARBER role required"
+          }
+        }
+      }
+    },
+    "/api/barber/appointments": {
+      "get": {
+        "tags": [
+          "Barber"
+        ],
+        "summary": "List own appointments by date range",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "query",
+            "name": "from",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "in": "query",
+            "name": "to",
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Assigned appointments with customer details"
+          }
+        }
+      }
+    },
+    "/api/barber/appointments/{appointmentId}/status": {
+      "patch": {
+        "tags": [
+          "Barber"
+        ],
+        "summary": "Update status of an assigned appointment",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "appointmentId",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "status"
+                ],
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "CONFIRMED",
+                      "COMPLETED",
+                      "NO_SHOW"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Appointment status updated"
+          },
+          "400": {
+            "description": "Invalid transition"
+          },
+          "404": {
+            "description": "Appointment not assigned or transition not allowed"
+          }
+        }
+      }
+    },
+    "/api/barber/availability": {
+      "get": {
+        "tags": [
+          "Barber"
+        ],
+        "summary": "Read own working hours and time off",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Own availability"
+          }
+        }
+      }
+    },
+    "/api/barber/time-off": {
+      "post": {
+        "tags": [
+          "Barber"
+        ],
+        "summary": "Create time off for own shop membership",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "staffId",
+                  "startsAt",
+                  "endsAt"
+                ],
+                "properties": {
+                  "staffId": {
+                    "type": "integer"
+                  },
+                  "startsAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "endsAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 240
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Time off created"
+          },
+          "404": {
+            "description": "Own staff membership not found"
+          }
+        }
       }
     }
   },

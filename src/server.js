@@ -5,6 +5,7 @@ const swaggerUi = require('swagger-ui-express');
 const openapiSpec = require('./openapi.json');
 const { createAuthRouter } = require('./routes/authRoutes');
 const { createBookingRouter } = require('./routes/bookingRoutes');
+const { createDashboardRouter } = require('./routes/dashboardRoutes');
 const { loadAuthConfig } = require('./auth/config');
 const { createTokenService } = require('./auth/tokens');
 const { Pool } = require('pg');
@@ -51,6 +52,7 @@ app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openapiSpec));
 app.use('/api/auth', createAuthRouter(pool));
 const bookingTokens = createTokenService(loadAuthConfig());
 app.use('/api', createBookingRouter(pool, bookingTokens));
+app.use('/api', createDashboardRouter(pool, bookingTokens));
 
 app.post(
   '/api/customers',
