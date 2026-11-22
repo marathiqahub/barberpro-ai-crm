@@ -6,6 +6,7 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
+    "start:render": "npm run db:migrate && npm start",
     "dev": "node --watch src/server.js",
     "db:migrate": "node scripts/migrate.js",
     "test": "node --test",
