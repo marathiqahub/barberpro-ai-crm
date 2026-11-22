@@ -605,6 +605,30 @@
             }
           }
         }
+      },
+      "get": {
+        "tags": [
+          "Booking"
+        ],
+        "summary": "List active barbers for customer selection",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "shopId",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Active shop barbers and eligible service assignments"
+          },
+          "400": {
+            "description": "Invalid shop id"
+          }
+        }
       }
     },
     "/api/staff/{staffId}/hours": {
