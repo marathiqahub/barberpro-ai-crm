@@ -38,9 +38,9 @@ function createPaymentRouter(pool, tokenService) {
     try {
       await client.query('BEGIN');
       const found = await client.query(
-        \`SELECT a.id, a.customer_id, a.status, sv.price
+        `SELECT a.id, a.customer_id, a.status, sv.price
          FROM appointments a JOIN services sv ON sv.id=a.service_id
-         WHERE a.id=$1 AND a.customer_id=$2 FOR UPDATE OF a\`, [appointmentId, req.user.id]);
+         WHERE a.id=$1 AND a.customer_id=$2 FOR UPDATE OF a`, [appointmentId, req.user.id]);
       if (!found.rowCount || !['BOOKED','CONFIRMED'].includes(found.rows[0].status)) {
         await client.query('ROLLBACK'); return res.status(404).json({ error: 'Payable appointment not found.' });
       }
@@ -55,11 +55,11 @@ function createPaymentRouter(pool, tokenService) {
       }
       const order = await razorpay('/orders', 'POST', { amount: amountPaise, currency: 'INR', receipt: 'appt_' + appointmentId, notes: { appointmentId: String(appointmentId), customerId: String(req.user.id) } });
       const saved = await client.query(
-        \`INSERT INTO payments (appointment_id, customer_id, provider_order_id, amount_paise, currency, provider_payload)
+        `INSERT INTO payments (appointment_id, customer_id, provider_order_id, amount_paise, currency, provider_payload)
          VALUES ($1,$2,$3,$4,'INR',$5::jsonb)
          ON CONFLICT (appointment_id) DO UPDATE SET provider_order_id=EXCLUDED.provider_order_id,
          amount_paise=EXCLUDED.amount_paise, provider_payload=EXCLUDED.provider_payload, status='CREATED', updated_at=NOW()
-         RETURNING id, appointment_id, provider_order_id, amount_paise, currency, status\`,
+         RETURNING id, appointment_id, provider_order_id, amount_paise, currency, status`,
         [appointmentId, req.user.id, order.id, amountPaise, JSON.stringify({ order })]);
       await client.query('COMMIT');
       res.status(201).json({ payment: saved.rows[0], keyId, order });
@@ -73,10 +73,10 @@ function createPaymentRouter(pool, tokenService) {
     const expected = hmac(keySecret || '', orderId + '|' + paymentId);
     if (!keySecret || !safeEqual(expected, signature)) return res.status(400).json({ error: 'Invalid payment signature.' });
     const result = await pool.query(
-      \`UPDATE payments SET provider_payment_id=$1, status='CAPTURED', updated_at=NOW(),
+      `UPDATE payments SET provider_payment_id=$1, status='CAPTURED', updated_at=NOW(),
        provider_payload=provider_payload || $2::jsonb
        WHERE provider_order_id=$3 AND customer_id=$4
-       RETURNING id, appointment_id, status\`,
+       RETURNING id, appointment_id, status`,
       [paymentId, JSON.stringify({ checkoutVerified: true }), orderId, req.user.id]);
     if (!result.rowCount) return res.status(404).json({ error: 'Payment order not found for this customer.' });
     res.json({ payment: result.rows[0] });
@@ -101,14 +101,14 @@ function createPaymentRouter(pool, tokenService) {
         if (entity?.order_id) {
           const status = event.event === 'payment.captured' ? 'CAPTURED' : event.event === 'payment.failed' ? 'FAILED' : null;
           if (status) await client.query(
-            \`UPDATE payments SET status=$1, provider_payment_id=COALESCE($2,provider_payment_id),
-             provider_payload=provider_payload || $3::jsonb, updated_at=NOW() WHERE provider_order_id=$4\`,
+            `UPDATE payments SET status=$1, provider_payment_id=COALESCE($2,provider_payment_id),
+             provider_payload=provider_payload || $3::jsonb, updated_at=NOW() WHERE provider_order_id=$4`,
             [status, entity.id || null, JSON.stringify({ webhookEvent: event.event }), entity.order_id]);
         }
         const refund = event.payload?.refund?.entity;
         if (refund?.id) await client.query(
-          \`UPDATE payment_refunds SET status=CASE WHEN $1='refund.processed' THEN 'PROCESSED' WHEN $1='refund.failed' THEN 'FAILED' ELSE status END,
-           provider_payload=provider_payload || $2::jsonb, updated_at=NOW() WHERE provider_refund_id=$3\`,
+          `UPDATE payment_refunds SET status=CASE WHEN $1='refund.processed' THEN 'PROCESSED' WHEN $1='refund.failed' THEN 'FAILED' ELSE status END,
+           provider_payload=provider_payload || $2::jsonb, updated_at=NOW() WHERE provider_refund_id=$3`,
           [event.event, JSON.stringify({ webhookEvent: event.event }), refund.id]);
       }
       await client.query('COMMIT');
@@ -122,7 +122,7 @@ function createPaymentRouter(pool, tokenService) {
     const paymentId = Number(req.params.paymentId);
     const amountPaise = req.body?.amountPaise === undefined ? null : Number(req.body.amountPaise);
     const reason = typeof req.body?.reason === 'string' ? req.body.reason.slice(0,240) : null;
-    const payment = await pool.query('SELECT * FROM payments WHERE id=$1 AND status IN (\\'CAPTURED\\',\\'PARTIALLY_REFUNDED\\')', [paymentId]);
+    const payment = await pool.query('SELECT * FROM payments WHERE id=$1 AND status IN ('CAPTURED','PARTIALLY_REFUNDED')', [paymentId]);
     if (!payment.rowCount || !payment.rows[0].provider_payment_id) return res.status(404).json({ error: 'Captured payment not found.' });
     const total = await pool.query("SELECT COALESCE(SUM(amount_paise),0)::bigint AS refunded FROM payment_refunds WHERE payment_id=$1 AND status IN ('PENDING','PROCESSED')", [paymentId]);
     const remaining = Number(payment.rows[0].amount_paise) - Number(total.rows[0].refunded);
@@ -130,8 +130,8 @@ function createPaymentRouter(pool, tokenService) {
     if (!Number.isSafeInteger(amount) || amount < 1 || amount > remaining) return res.status(400).json({ error: 'Refund amount exceeds the remaining captured balance.' });
     const refund = await razorpay('/payments/' + encodeURIComponent(payment.rows[0].provider_payment_id) + '/refunds', 'POST', { amount, notes: { reason: reason || 'Admin initiated refund' } });
     const saved = await pool.query(
-      \`INSERT INTO payment_refunds (payment_id,provider_refund_id,amount_paise,status,reason,provider_payload)
-       VALUES ($1,$2,$3,$4,$5,$6::jsonb) RETURNING *\`,
+      `INSERT INTO payment_refunds (payment_id,provider_refund_id,amount_paise,status,reason,provider_payload)
+       VALUES ($1,$2,$3,$4,$5,$6::jsonb) RETURNING *`,
       [paymentId, refund.id, amount, refund.status === 'processed' ? 'PROCESSED' : 'PENDING', reason, JSON.stringify(refund)]);
     await pool.query("UPDATE payments SET status=CASE WHEN $2 >= amount_paise THEN 'REFUNDED' ELSE 'PARTIALLY_REFUNDED' END, updated_at=NOW() WHERE id=$1",
       [paymentId, Number(total.rows[0].refunded) + amount]);
@@ -144,10 +144,10 @@ function createPaymentRouter(pool, tokenService) {
   }));
   router.get('/reconciliation', ...admin, asyncRoute(async (req,res) => {
     const result = await pool.query(
-      \`SELECT p.id,p.appointment_id,p.provider_order_id,p.provider_payment_id,p.amount_paise,p.currency,p.status,p.created_at,
+      `SELECT p.id,p.appointment_id,p.provider_order_id,p.provider_payment_id,p.amount_paise,p.currency,p.status,p.created_at,
        COALESCE(SUM(r.amount_paise) FILTER (WHERE r.status IN ('PENDING','PROCESSED')),0)::bigint AS refunded_paise
        FROM payments p LEFT JOIN payment_refunds r ON r.payment_id=p.id
-       GROUP BY p.id ORDER BY p.created_at DESC LIMIT 500\`);
+       GROUP BY p.id ORDER BY p.created_at DESC LIMIT 500`);
     res.json({ payments: result.rows });
   }));
   return router;
