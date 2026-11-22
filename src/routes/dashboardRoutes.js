@@ -25,6 +25,25 @@ function createDashboardRouter(pool, tokenService) {
     return { from: from || new Date().toISOString().slice(0, 10), to: to || new Date().toISOString().slice(0, 10) };
   };
 
+  // Public barber directory used by customer discovery and appointment selection.
+  router.get('/shops/:shopId/staff', asyncRoute(async (req, res) => {
+    const shopId = id(req.params.shopId);
+    if (!shopId) return res.status(400).json({ error: 'Invalid shop id.' });
+    const result = await pool.query(
+      `SELECT st.id,st.display_name,
+              COALESCE(json_agg(json_build_object('id',sv.id,'name',sv.name,'durationMinutes',sv.duration_minutes,'price',sv.price))
+                FILTER (WHERE sv.id IS NOT NULL),'[]'::json) AS services
+       FROM shop_staff st
+       JOIN shops sh ON sh.id=st.shop_id AND sh.is_active=TRUE
+       LEFT JOIN staff_services ss ON ss.staff_id=st.id
+       LEFT JOIN services sv ON sv.id=ss.service_id AND sv.is_active=TRUE
+       WHERE st.shop_id=$1 AND st.is_active=TRUE
+       GROUP BY st.id,st.display_name ORDER BY st.display_name`,
+      [shopId]
+    );
+    res.json({ staff: result.rows });
+  }));
+
   // Admin overview spans every shop the platform operates.
   router.get('/admin/dashboard', ...admin, asyncRoute(async (req, res) => {
     const { from, to } = range(req, res) || {};
