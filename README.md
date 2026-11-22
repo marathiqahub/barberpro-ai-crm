@@ -41,11 +41,35 @@ PostgreSQL runs SQL files in `db/migrations` only when initializing an empty dat
 Requirements: Node.js 20+ and PostgreSQL.
 
 1. Install dependencies with `npm install`.
-2. Apply both migrations in order: `db/migrations/001_create_customers.sql`, then `db/migrations/002_create_auth_tables.sql`.
+2. Apply both migrations in order: `db/migrations/001_create_customers.sql`, then `db/migrations/002_create_auth_tables.sql`, then `db/migrations/003_create_booking_tables.sql`.
 3. Set `DATABASE_URL`, `JWT_ACCESS_SECRET`, and `JWT_REFRESH_SECRET` in your private `.env`. Use different random secrets of at least 32 bytes. Alternatively, set the corresponding `*_FILE` variables to readable secret files.
 4. Start the server with `npm start` (or `npm run dev` during development).
 
 The API refuses to start its authentication routes if either JWT secret is missing or shorter than 32 bytes.
+
+## Booking and multi-shop API
+
+Apply migration `003_create_booking_tables.sql` after the authentication migration. It creates shops, barber memberships, services, optional barber-to-service assignments, weekly working hours, time off, and appointments. Each shop stores an IANA timezone (defaults to `Asia/Kolkata`). Working-hour slots are calculated in that shop timezone; appointment timestamps sent to the API must be ISO 8601 timestamps.
+
+Public discovery:
+- `GET /api/shops` — list active shops.
+- `GET /api/shops/:shopId/services` — list active services.
+- `GET /api/shops/:shopId/availability?serviceId=1&date=YYYY-MM-DD&staffId=2` — list future 15-minute start slots that fit the service duration, staff schedule, time off and existing bookings.
+
+ADMIN access:
+- `POST /api/shops` — create a shop (`name`, unique URL-safe `slug`, optional `address`, `phone`, `timezone`).
+- `POST /api/shops/:shopId/staff` — attach an active BARBER user (`userId`, `displayName`).
+- `POST /api/shops/:shopId/services` — create a service (`name`, `durationMinutes`, `price`, optional `description`).
+- `POST /api/staff/:staffId/services/:serviceId` — restrict a barber to selected services. If no service mapping exists for a barber, all shop services are eligible.
+- `PUT /api/staff/:staffId/hours` — upsert one weekly schedule (`dayOfWeek` 0=Sunday through 6=Saturday, `opensAt`, `closesAt`, optional `isActive`).
+- `POST /api/staff/:staffId/time-off` — add a time-off interval (`startsAt`, `endsAt`, optional `reason`).
+
+Customer access:
+- `POST /api/appointments` — book a slot (`shopId`, `serviceId`, `staffId`, ISO `startsAt`, optional `customerNotes`).
+- `GET /api/appointments/mine` — list the signed-in customer's appointments.
+- `PATCH /api/appointments/:appointmentId/cancel` — cancel an upcoming booking owned by the customer. ADMIN may cancel any upcoming booking.
+
+Booking writes validate the shop's local working hours and service duration, enforce barber/service compatibility, exclude time off, and use a PostgreSQL GiST exclusion constraint to prevent overlapping active appointments even under concurrent requests. Public registration still cannot assign ADMIN or BARBER roles; provision privileged accounts through a trusted operator workflow.
 
 ## Authentication API
 
