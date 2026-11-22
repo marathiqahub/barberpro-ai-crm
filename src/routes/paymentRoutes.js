@@ -44,10 +44,10 @@ function createPaymentRouter(pool, tokenService) {
       if (!found.rowCount || !['BOOKED','CONFIRMED'].includes(found.rows[0].status)) {
         await client.query('ROLLBACK'); return res.status(404).json({ error: 'Payable appointment not found.' });
       }
-      const existing = await client.query('SELECT id, provider_order_id, amount_paise, currency, status FROM payments WHERE appointment_id=$1', [appointmentId]);
+      const existing = await client.query('SELECT id, provider_order_id, amount_paise, currency, status, provider_payload FROM payments WHERE appointment_id=$1', [appointmentId]);
       if (existing.rowCount && existing.rows[0].provider_order_id) {
         await client.query('COMMIT');
-        return res.json({ payment: existing.rows[0], keyId });
+        return res.json({ payment: existing.rows[0], keyId, order: existing.rows[0].provider_payload?.order || null });
       }
       const amountPaise = Math.round(Number(found.rows[0].price) * 100);
       if (!Number.isSafeInteger(amountPaise) || amountPaise < 100) {
@@ -165,6 +165,15 @@ function createPaymentRouter(pool, tokenService) {
       `INSERT INTO payment_refunds (payment_id,provider_refund_id,amount_paise,status,reason,provider_payload)
        VALUES ($1,$2,$3,$4,$5,$6::jsonb) RETURNING *`,
       [paymentId, refund.id, amount, refund.status === 'processed' ? 'PROCESSED' : 'PENDING', reason, JSON.stringify(refund)]);
+    if (refund.status === 'processed') {
+      await pool.query(
+        `UPDATE payments p SET status=CASE
+           WHEN (SELECT COALESCE(SUM(r.amount_paise),0) FROM payment_refunds r
+                 WHERE r.payment_id=p.id AND r.status='PROCESSED') >= p.amount_paise THEN 'REFUNDED'
+           ELSE 'PARTIALLY_REFUNDED' END, updated_at=NOW()
+         WHERE p.id=$1 AND p.status IN ('CAPTURED','PARTIALLY_REFUNDED','REFUNDED')`,
+        [paymentId]);
+    }
     res.status(201).json({ refund: saved.rows[0] });
   }));
 
