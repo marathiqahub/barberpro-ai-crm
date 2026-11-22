@@ -53,10 +53,10 @@ function createOperatorRouter(pool) {
         return res.status(409).json({ error: 'One or more bootstrap email addresses already exist. Resolve the existing accounts before retrying.' });
       }
 
-      const placeholderPassword = crypto.randomBytes(48).toString('base64url');
-      const placeholderHash = await argon2.hash(placeholderPassword, passwordHashOptions);
       const created = [];
       for (const definition of definitions) {
+        const placeholderPassword = crypto.randomBytes(48).toString('base64url');
+        const placeholderHash = await argon2.hash(placeholderPassword, passwordHashOptions);
         const result = await client.query(
           `INSERT INTO users (name, email, password_hash, role, is_active)
            VALUES ($1, $2, $3, $4, FALSE)
@@ -69,8 +69,6 @@ function createOperatorRouter(pool) {
       const shopResult = await client.query(
         `INSERT INTO shops (name, slug, address, timezone)
          VALUES ('Aai Ekveera', 'aai-ekveera', 'Hiwara, Maharashtra, India', 'Asia/Kolkata')
-         ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name, address = EXCLUDED.address,
-           timezone = EXCLUDED.timezone, updated_at = NOW()
          RETURNING id, name, slug, address, timezone`
       );
       const barber = created.find((user) => user.role === 'BARBER');
