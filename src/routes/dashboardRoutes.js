@@ -125,7 +125,7 @@ function createDashboardRouter(pool, tokenService) {
        LEFT JOIN appointments a ON a.staff_id = st.id
          AND a.starts_at >= $1::date AND a.starts_at < ($2::date + 1)
        LEFT JOIN payments p ON p.appointment_id = a.id
-       GROUP BY sh.id, sh.name, st.id, st.display_name ORDER BY sh.name, revenue DESC, st.display_name`,
+       GROUP BY sh.id, sh.name, st.id, st.display_name ORDER BY sh.name, captured_revenue_paise DESC, st.display_name`,
       [period.from, period.to]
     );
     res.json({ period, staff: result.rows });
