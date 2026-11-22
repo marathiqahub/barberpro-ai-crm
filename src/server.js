@@ -31,7 +31,7 @@ app.disable('x-powered-by');
 app.use(helmet({ contentSecurityPolicy: { directives: { scriptSrc: ["'self'", 'https://checkout.razorpay.com'], frameSrc: ["'self'", 'https://checkout.razorpay.com', 'https://api.razorpay.com'], connectSrc: ["'self'", 'https://api.razorpay.com'] } } }));
 const bookingTokens = createTokenService(loadAuthConfig());
 const paymentRouter = createPaymentRouter(pool, bookingTokens);
-app.use('/api/payments', paymentRouter); // raw webhook verification before express.json
+app.use('/api/payments', (req, res, next) => req.path === '/webhook' ? paymentRouter(req, res, next) : next()); // raw webhook only before express.json
 app.use(express.json({ limit: '10kb' }));
 
 app.get('/health/live', (req, res) => res.status(200).json({ status: 'ok' }));
