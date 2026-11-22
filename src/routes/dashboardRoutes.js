@@ -56,9 +56,10 @@ function createDashboardRouter(pool, tokenService) {
          (SELECT COUNT(*)::int FROM appointments a JOIN shops sh ON sh.id=a.shop_id WHERE (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $1::date AND $2::date AND a.status = 'COMPLETED') AS completed,
          (SELECT COUNT(*)::int FROM appointments a JOIN shops sh ON sh.id=a.shop_id WHERE (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $1::date AND $2::date AND a.status = 'CANCELLED') AS cancelled,
          (SELECT COUNT(*)::int FROM appointments a JOIN shops sh ON sh.id=a.shop_id WHERE (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $1::date AND $2::date AND a.status = 'NO_SHOW') AS no_shows,
-         (SELECT COALESCE(SUM(p.amount_paise), 0)::bigint
+         (SELECT COALESCE(SUM(p.amount_paise - COALESCE(refunds.refunded_paise,0)), 0)::bigint
             FROM payments p JOIN appointments a ON a.id=p.appointment_id
-           WHERE (a.starts_at AT TIME ZONE (SELECT timezone FROM shops WHERE id=a.shop_id))::date BETWEEN $1::date AND $2::date AND p.status = 'CAPTURED') AS captured_revenue_paise`,
+            LEFT JOIN (SELECT payment_id,SUM(amount_paise) AS refunded_paise FROM payment_refunds WHERE status='PROCESSED' GROUP BY payment_id) refunds ON refunds.payment_id=p.id
+           WHERE (a.starts_at AT TIME ZONE (SELECT timezone FROM shops WHERE id=a.shop_id))::date BETWEEN $1::date AND $2::date AND p.status IN ('CAPTURED','PARTIALLY_REFUNDED','REFUNDED')) AS captured_revenue_paise`,
       [from, to]
     );
     const shops = await pool.query(
@@ -120,11 +121,12 @@ function createDashboardRouter(pool, tokenService) {
               COUNT(DISTINCT a.id)::int AS appointments,
               COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'COMPLETED')::int AS completed,
               COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'NO_SHOW')::int AS no_shows,
-              COALESCE(SUM(p.amount_paise) FILTER (WHERE p.status = 'CAPTURED'),0)::bigint AS captured_revenue_paise
+              COALESCE(SUM(p.amount_paise - COALESCE(refunds.refunded_paise,0)) FILTER (WHERE p.status IN ('CAPTURED','PARTIALLY_REFUNDED','REFUNDED')),0)::bigint AS captured_revenue_paise
        FROM shop_staff st JOIN shops sh ON sh.id = st.shop_id
        LEFT JOIN appointments a ON a.staff_id = st.id
          AND (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $1::date AND $2::date
        LEFT JOIN payments p ON p.appointment_id = a.id
+       LEFT JOIN (SELECT payment_id,SUM(amount_paise) AS refunded_paise FROM payment_refunds WHERE status='PROCESSED' GROUP BY payment_id) refunds ON refunds.payment_id=p.id
        GROUP BY sh.id, sh.name, st.id, st.display_name ORDER BY sh.name, captured_revenue_paise DESC, st.display_name`,
       [period.from, period.to]
     );
@@ -144,6 +146,7 @@ function createDashboardRouter(pool, tokenService) {
        FROM shops sh LEFT JOIN appointments a ON a.shop_id = sh.id
          AND (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $1::date AND $2::date
        LEFT JOIN payments p ON p.appointment_id = a.id
+       LEFT JOIN (SELECT payment_id,SUM(amount_paise) AS refunded_paise FROM payment_refunds WHERE status='PROCESSED' GROUP BY payment_id) refunds ON refunds.payment_id=p.id
        GROUP BY sh.id, sh.name ORDER BY sh.name`,
       [period.from, period.to]
     );
