@@ -142,7 +142,7 @@ function createDashboardRouter(pool, tokenService) {
               COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'COMPLETED')::int AS completed,
               COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'CANCELLED')::int AS cancelled,
               COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'NO_SHOW')::int AS no_shows,
-              COALESCE(SUM(p.amount_paise) FILTER (WHERE p.status = 'CAPTURED'),0)::bigint AS captured_revenue_paise
+              COALESCE(SUM(p.amount_paise - COALESCE(refunds.refunded_paise,0)) FILTER (WHERE p.status IN ('CAPTURED','PARTIALLY_REFUNDED','REFUNDED')),0)::bigint AS captured_revenue_paise
        FROM shops sh LEFT JOIN appointments a ON a.shop_id = sh.id
          AND (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $1::date AND $2::date
        LEFT JOIN payments p ON p.appointment_id = a.id
