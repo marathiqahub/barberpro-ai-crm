@@ -3,6 +3,8 @@ const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
+const os = require('node:os');
+const crypto = require('node:crypto');
 const { Pool } = require('pg');
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
@@ -17,11 +19,38 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
   const baseUrl = `http://127.0.0.1:${port}`;
 
   try {
-    for (const migration of ['001_create_customers.sql', '002_create_auth_tables.sql', '003_create_booking_tables.sql']) {
+    for (const migration of ['001_create_customers.sql', '002_create_auth_tables.sql', '003_create_booking_tables.sql', '004_create_payment_tables.sql']) {
       const sql = fs.readFileSync(path.join(__dirname, '..', 'db', 'migrations', migration), 'utf8');
       await pool.query(sql);
     }
 
+    const mockDir = fs.mkdtempSync(path.join(os.tmpdir(), 'barberpro-razorpay-'));
+    const mockPath = path.join(mockDir, 'mock-razorpay.cjs');
+    fs.writeFileSync(mockPath, `
+      let lastOrder;
+      global.fetch = async (url, options = {}) => {
+        const target = String(url);
+        if (target === 'https://api.razorpay.com/v1/orders' && options.method === 'POST') {
+          const input = JSON.parse(options.body);
+          lastOrder = { id: 'order_test_' + input.receipt, amount: input.amount, currency: input.currency, status: 'created' };
+          return new Response(JSON.stringify(lastOrder), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        if (target.includes('/payments/pay_test_capture_001') && options.method === 'GET') {
+          if (!lastOrder) return new Response(JSON.stringify({ error: { description: 'Order missing' } }), { status: 404 });
+          return new Response(JSON.stringify({
+            id: 'pay_test_capture_001', order_id: lastOrder.id, amount: lastOrder.amount,
+            currency: lastOrder.currency, status: 'captured'
+          }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        if (target.includes('/payments/pay_test_capture_001/refunds') && options.method === 'POST') {
+          const input = JSON.parse(options.body);
+          return new Response(JSON.stringify({
+            id: 'rfnd_test_001', payment_id: 'pay_test_capture_001', amount: input.amount, status: 'processed'
+          }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
+        return new Response(JSON.stringify({ error: { description: 'Unexpected mocked provider request' } }), { status: 500 });
+      };
+    `);
     serverProcess = spawn(process.execPath, ['src/server.js'], {
       cwd: path.join(__dirname, '..'),
       env: {
@@ -29,7 +58,11 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
         DATABASE_URL: databaseUrl,
         PORT: String(port),
         JWT_ACCESS_SECRET: 'integration-access-secret-with-at-least-32-bytes',
-        JWT_REFRESH_SECRET: 'integration-refresh-secret-different-and-long-enough'
+        JWT_REFRESH_SECRET: 'integration-refresh-secret-different-and-long-enough',
+        RAZORPAY_KEY_ID: 'rzp_test_integration_key',
+        RAZORPAY_KEY_SECRET: 'integration-razorpay-key-secret',
+        RAZORPAY_WEBHOOK_SECRET: 'integration-razorpay-webhook-secret',
+        NODE_OPTIONS: [process.env.NODE_OPTIONS, '--require', mockPath].filter(Boolean).join(' ')
       },
       stdio: ['ignore', 'pipe', 'pipe']
     });
@@ -231,9 +264,90 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
 
     const myAppointments = await request('/api/appointments/mine', { token: bookingCustomer.body.tokens.accessToken });
     assert.ok(myAppointments.body.appointments.some(item => String(item.id) === String(booking.body.appointment.id)));
-    const cancelled = await request(`/api/appointments/${booking.body.appointment.id}/cancel`, {
-      method: 'PATCH',
-      token: bookingCustomer.body.tokens.accessToken
+
+    // Razorpay test-mode order, checkout signature and provider capture verification.
+    const orderResponse = await request('/api/payments/orders', {
+      method: 'POST', token: bookingCustomer.body.tokens.accessToken,
+      body: { appointmentId: booking.body.appointment.id }
+    });
+    assert.equal(orderResponse.status, 201);
+    assert.equal(orderResponse.body.order.amount, 35000);
+    const orderId = orderResponse.body.order.id;
+    const paymentId = 'pay_test_capture_001';
+    const signature = crypto.createHmac('sha256', 'integration-razorpay-key-secret')
+      .update(orderId + '|' + paymentId).digest('hex');
+    const verified = await request('/api/payments/verify', {
+      method: 'POST', token: bookingCustomer.body.tokens.accessToken,
+      body: { razorpay_order_id: orderId, razorpay_payment_id: paymentId, razorpay_signature: signature }
+    });
+    assert.equal(verified.status, 200);
+    assert.equal(verified.body.payment.status, 'CAPTURED');
+
+    // Barber route is date/shop scoped; invalid BOOKED -> COMPLETED is rejected.
+    const barberLogin = await request('/api/auth/login', {
+      method: 'POST', body: { email: barberEmail, password }
+    });
+    assert.equal(barberLogin.status, 200);
+    const barberAppointments = await request(
+      `/api/barber/appointments?from=${bookingDate}&to=${bookingDate}&shopId=${staffId}`,
+      { token: barberLogin.body.tokens.accessToken }
+    );
+    assert.equal(barberAppointments.status, 200);
+    assert.ok(barberAppointments.body.appointments.some(item => String(item.id) === String(booking.body.appointment.id)));
+    const invalidTransition = await request(`/api/barber/appointments/${booking.body.appointment.id}/status`, {
+      method: 'PATCH', token: barberLogin.body.tokens.accessToken, body: { status: 'COMPLETED' }
+    });
+    assert.equal(invalidTransition.status, 404);
+    const confirmed = await request(`/api/barber/appointments/${booking.body.appointment.id}/status`, {
+      method: 'PATCH', token: barberLogin.body.tokens.accessToken, body: { status: 'CONFIRMED' }
+    });
+    assert.equal(confirmed.status, 200);
+    const completed = await request(`/api/barber/appointments/${booking.body.appointment.id}/status`, {
+      method: 'PATCH', token: barberLogin.body.tokens.accessToken, body: { status: 'COMPLETED' }
+    });
+    assert.equal(completed.status, 200);
+
+    // Admin shop, staff and revenue reports reconcile with the captured payment.
+    const adminDashboard = await request(`/api/admin/dashboard?from=${bookingDate}&to=${bookingDate}`, {
+      token: adminLogin.body.tokens.accessToken
+    });
+    assert.equal(adminDashboard.status, 200);
+    assert.ok(Number(adminDashboard.body.metrics.completed) >= 1);
+    assert.equal(Number(adminDashboard.body.metrics.captured_revenue_paise), 35000);
+    const staffReport = await request(`/api/admin/staff-performance?from=${bookingDate}&to=${bookingDate}`, {
+      token: adminLogin.body.tokens.accessToken
+    });
+    assert.equal(staffReport.status, 200);
+    assert.ok(staffReport.body.staff.some(item => String(item.staff_id) === String(staffId) && Number(item.completed) === 1));
+    const shopReport = await request(`/api/admin/reports?from=${bookingDate}&to=${bookingDate}`, {
+      token: adminLogin.body.tokens.accessToken
+    });
+    assert.equal(shopReport.status, 200);
+    assert.equal(Number(shopReport.body.report.find(item => String(item.shop_id) === String(shopId)).captured_revenue_paise), 35000);
+    const reconciliation = await request('/api/payments/reconciliation', { token: adminLogin.body.tokens.accessToken });
+    assert.equal(reconciliation.status, 200);
+    const capturedRow = reconciliation.body.payments.find(item => String(item.appointment_id) === String(booking.body.appointment.id));
+    assert.equal(capturedRow.status, 'CAPTURED');
+
+    // A processed refund updates both refund ledger and payment reconciliation.
+    const refund = await request(`/api/payments/${capturedRow.id}/refunds`, {
+      method: 'POST', token: adminLogin.body.tokens.accessToken, body: { reason: 'Integration test refund' }
+    });
+    assert.equal(refund.status, 201);
+    const afterRefund = await request('/api/payments/reconciliation', { token: adminLogin.body.tokens.accessToken });
+    const refundedRow = afterRefund.body.payments.find(item => String(item.id) === String(capturedRow.id));
+    assert.equal(refundedRow.status, 'REFUNDED');
+    assert.equal(Number(refundedRow.refunded_paise), 35000);
+
+    // Customer cancellation remains available for a separate unpaid booking.
+    const secondStartsAt = `${bookingDate}T05:00:00.000Z`;
+    const secondBooking = await request('/api/appointments', {
+      method: 'POST', token: bookingCustomer.body.tokens.accessToken,
+      body: { shopId, serviceId, staffId, startsAt: secondStartsAt }
+    });
+    assert.equal(secondBooking.status, 201);
+    const cancelled = await request(`/api/appointments/${secondBooking.body.appointment.id}/cancel`, {
+      method: 'PATCH', token: bookingCustomer.body.tokens.accessToken
     });
     assert.equal(cancelled.status, 200);
     assert.equal(cancelled.body.appointment.status, 'CANCELLED');
