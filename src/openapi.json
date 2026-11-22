@@ -2,8 +2,8 @@
   "openapi": "3.0.3",
   "info": {
     "title": "BarberPro AI CRM API",
-    "version": "1.1.0",
-    "description": "Customer registration and account authentication API for BarberPro AI CRM."
+    "version": "1.2.0",
+    "description": "Multi-shop barber CRM API with customer authentication, staff scheduling, services and appointment booking."
   },
   "servers": [
     {
@@ -19,6 +19,10 @@
     {
       "name": "Customers",
       "description": "Customer registration"
+    },
+    {
+      "name": "Booking",
+      "description": "Shop discovery, services, staff availability and appointments"
     }
   ],
   "paths": {
@@ -353,6 +357,523 @@
             }
           }
         }
+      }
+    },
+    "/api/shops": {
+      "get": {
+        "tags": [
+          "Booking"
+        ],
+        "summary": "List active shops",
+        "responses": {
+          "200": {
+            "description": "Active shops"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Booking"
+        ],
+        "summary": "Create a shop",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Shop created"
+          },
+          "400": {
+            "description": "Invalid shop data"
+          },
+          "403": {
+            "description": "ADMIN role required"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "slug"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "slug": {
+                    "type": "string"
+                  },
+                  "address": {
+                    "type": "string"
+                  },
+                  "phone": {
+                    "type": "string"
+                  },
+                  "timezone": {
+                    "type": "string",
+                    "example": "Asia/Kolkata"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/shops/{shopId}/services": {
+      "get": {
+        "tags": [
+          "Booking"
+        ],
+        "summary": "List active shop services",
+        "responses": {
+          "200": {
+            "description": "Services"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Booking"
+        ],
+        "summary": "Create a shop service",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Service created"
+          },
+          "400": {
+            "description": "Invalid service"
+          },
+          "403": {
+            "description": "ADMIN role required"
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "shopId",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "durationMinutes",
+                  "price"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "durationMinutes": {
+                    "type": "integer",
+                    "minimum": 5,
+                    "maximum": 240
+                  },
+                  "price": {
+                    "type": "number",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/shops/{shopId}/availability": {
+      "get": {
+        "tags": [
+          "Booking"
+        ],
+        "summary": "Find available appointment start times",
+        "responses": {
+          "200": {
+            "description": "Available 15-minute slots in the shop's timezone"
+          },
+          "400": {
+            "description": "Invalid query"
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "shopId",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "query",
+            "name": "date",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date"
+            }
+          },
+          {
+            "in": "query",
+            "name": "staffId",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    "/api/shops/{shopId}/staff": {
+      "post": {
+        "tags": [
+          "Booking"
+        ],
+        "summary": "Add a barber to a shop",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Staff member added"
+          },
+          "404": {
+            "description": "Shop or active BARBER not found"
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "shopId",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "userId",
+                  "displayName"
+                ],
+                "properties": {
+                  "userId": {
+                    "type": "integer"
+                  },
+                  "displayName": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/staff/{staffId}/hours": {
+      "put": {
+        "tags": [
+          "Booking"
+        ],
+        "summary": "Set weekly barber working hours",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Hours saved"
+          },
+          "400": {
+            "description": "Invalid schedule"
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "staffId",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "dayOfWeek",
+                  "opensAt",
+                  "closesAt"
+                ],
+                "properties": {
+                  "dayOfWeek": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "maximum": 6
+                  },
+                  "opensAt": {
+                    "type": "string",
+                    "example": "09:00"
+                  },
+                  "closesAt": {
+                    "type": "string",
+                    "example": "18:00"
+                  },
+                  "isActive": {
+                    "type": "boolean"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/staff/{staffId}/time-off": {
+      "post": {
+        "tags": [
+          "Booking"
+        ],
+        "summary": "Add barber time off",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Time off saved"
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "staffId",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "startsAt",
+                  "endsAt"
+                ],
+                "properties": {
+                  "startsAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "endsAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "reason": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/staff/{staffId}/services/{serviceId}": {
+      "post": {
+        "tags": [
+          "Booking"
+        ],
+        "summary": "Assign a service to a barber",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Assignment saved"
+          },
+          "404": {
+            "description": "Staff and service must belong to same shop"
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "staffId",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "in": "path",
+            "name": "serviceId",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
+      }
+    },
+    "/api/appointments": {
+      "post": {
+        "tags": [
+          "Booking"
+        ],
+        "summary": "Book an appointment",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Appointment booked"
+          },
+          "400": {
+            "description": "Invalid booking"
+          },
+          "403": {
+            "description": "Customer account required"
+          },
+          "409": {
+            "description": "Slot unavailable or concurrently booked"
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "shopId",
+                  "serviceId",
+                  "staffId",
+                  "startsAt"
+                ],
+                "properties": {
+                  "shopId": {
+                    "type": "integer"
+                  },
+                  "serviceId": {
+                    "type": "integer"
+                  },
+                  "staffId": {
+                    "type": "integer"
+                  },
+                  "startsAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  },
+                  "customerNotes": {
+                    "type": "string",
+                    "maxLength": 1000
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/appointments/mine": {
+      "get": {
+        "tags": [
+          "Booking"
+        ],
+        "summary": "List my appointments",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Customer appointment history"
+          }
+        }
+      }
+    },
+    "/api/appointments/{appointmentId}/cancel": {
+      "patch": {
+        "tags": [
+          "Booking"
+        ],
+        "summary": "Cancel an upcoming appointment",
+        "security": [
+          {
+            "BearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Appointment cancelled"
+          },
+          "404": {
+            "description": "Appointment not found or not cancellable"
+          }
+        },
+        "parameters": [
+          {
+            "in": "path",
+            "name": "appointmentId",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ]
       }
     }
   },

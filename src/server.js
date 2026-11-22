@@ -4,6 +4,9 @@ const rateLimit = require('express-rate-limit');
 const swaggerUi = require('swagger-ui-express');
 const openapiSpec = require('./openapi.json');
 const { createAuthRouter } = require('./routes/authRoutes');
+const { createBookingRouter } = require('./routes/bookingRoutes');
+const { loadAuthConfig } = require('./auth/config');
+const { createTokenService } = require('./auth/tokens');
 const { Pool } = require('pg');
 const fs = require('node:fs');
 require('dotenv').config();
@@ -46,6 +49,8 @@ app.use('/api-docs', (req, res, next) => {
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openapiSpec));
 
 app.use('/api/auth', createAuthRouter(pool));
+const bookingTokens = createTokenService(loadAuthConfig());
+app.use('/api', createBookingRouter(pool, bookingTokens));
 
 app.post(
   '/api/customers',

@@ -17,7 +17,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
   const baseUrl = `http://127.0.0.1:${port}`;
 
   try {
-    for (const migration of ['001_create_customers.sql', '002_create_auth_tables.sql']) {
+    for (const migration of ['001_create_customers.sql', '002_create_auth_tables.sql', '003_create_booking_tables.sql']) {
       const sql = fs.readFileSync(path.join(__dirname, '..', 'db', 'migrations', migration), 'utf8');
       await pool.query(sql);
     }
@@ -150,6 +150,93 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
       body: { name: 'Duplicate Customer', email: customerEmail }
     });
     assert.equal(duplicateCustomer.status, 409);
+
+    // Create a separate customer identity for appointment booking.
+    const bookingCustomer = await request('/api/auth/register', {
+      method: 'POST',
+      body: { name: 'Booking Customer', email: `booking-${suffix}@example.test`, password }
+    });
+    assert.equal(bookingCustomer.status, 201);
+
+    // Exercise multi-shop setup, barber schedules, service availability and conflict-safe booking.
+    await pool.query("UPDATE users SET role = 'ADMIN' WHERE id = $1", [registered.body.user.id]);
+    const adminLogin = await request('/api/auth/login', {
+      method: 'POST',
+      body: { email: emailA, password }
+    });
+    assert.equal(adminLogin.status, 200);
+    const shopResponse = await request('/api/shops', {
+      method: 'POST',
+      token: adminLogin.body.tokens.accessToken,
+      body: { name: 'Integration Barber Shop', slug: `integration-${suffix}`, timezone: 'Asia/Kolkata' }
+    });
+    assert.equal(shopResponse.status, 201);
+    const shopId = shopResponse.body.shop.id;
+
+    const barberEmail = `barber-${suffix}@example.test`;
+    const barberRegistration = await request('/api/auth/register', {
+      method: 'POST',
+      body: { name: 'Integration Barber', email: barberEmail, password }
+    });
+    assert.equal(barberRegistration.status, 201);
+    await pool.query("UPDATE users SET role = 'BARBER' WHERE id = $1", [barberRegistration.body.user.id]);
+
+    const serviceResponse = await request(`/api/shops/${shopId}/services`, {
+      method: 'POST',
+      token: adminLogin.body.tokens.accessToken,
+      body: { name: 'Classic Haircut', durationMinutes: 30, price: 350 }
+    });
+    assert.equal(serviceResponse.status, 201);
+    const serviceId = serviceResponse.body.service.id;
+
+    const staffResponse = await request(`/api/shops/${shopId}/staff`, {
+      method: 'POST',
+      token: adminLogin.body.tokens.accessToken,
+      body: { userId: barberRegistration.body.user.id, displayName: 'Integration Barber' }
+    });
+    assert.equal(staffResponse.status, 201);
+    const staffId = staffResponse.body.staff.id;
+
+    const staffService = await request(`/api/staff/${staffId}/services/${serviceId}`, {
+      method: 'POST',
+      token: adminLogin.body.tokens.accessToken
+    });
+    assert.equal(staffService.status, 201);
+
+    const bookingDate = new Date(Date.now() + 3 * 86400000).toISOString().slice(0, 10);
+    const dayOfWeek = new Date(`${bookingDate}T00:00:00.000Z`).getUTCDay();
+    const hours = await request(`/api/staff/${staffId}/hours`, {
+      method: 'PUT',
+      token: adminLogin.body.tokens.accessToken,
+      body: { dayOfWeek, opensAt: '00:00', closesAt: '23:59' }
+    });
+    assert.equal(hours.status, 200);
+
+    const availability = await request(`/api/shops/${shopId}/availability?serviceId=${serviceId}&staffId=${staffId}&date=${bookingDate}`);
+    assert.equal(availability.status, 200);
+    assert.ok(availability.body.slots.length > 0);
+    const startsAt = `${bookingDate}T04:30:00.000Z`; // 10:00 in the shop's Asia/Kolkata timezone.
+    const booking = await request('/api/appointments', {
+      method: 'POST',
+      token: bookingCustomer.body.tokens.accessToken,
+      body: { shopId, serviceId, staffId, startsAt, customerNotes: 'Integration test booking' }
+    });
+    assert.equal(booking.status, 201);
+    const duplicateBooking = await request('/api/appointments', {
+      method: 'POST',
+      token: bookingCustomer.body.tokens.accessToken,
+      body: { shopId, serviceId, staffId, startsAt }
+    });
+    assert.equal(duplicateBooking.status, 409);
+
+    const myAppointments = await request('/api/appointments/mine', { token: bookingCustomer.body.tokens.accessToken });
+    assert.ok(myAppointments.body.appointments.some(item => String(item.id) === String(booking.body.appointment.id)));
+    const cancelled = await request(`/api/appointments/${booking.body.appointment.id}/cancel`, {
+      method: 'PATCH',
+      token: bookingCustomer.body.tokens.accessToken
+    });
+    assert.equal(cancelled.status, 200);
+    assert.equal(cancelled.body.appointment.status, 'CANCELLED');
   } finally {
     if (serverProcess && serverProcess.exitCode === null) {
       serverProcess.kill('SIGTERM');
