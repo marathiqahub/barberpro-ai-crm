@@ -151,6 +151,13 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     });
     assert.equal(duplicateCustomer.status, 409);
 
+    // Create a separate customer identity for appointment booking.
+    const bookingCustomer = await request('/api/auth/register', {
+      method: 'POST',
+      body: { name: 'Booking Customer', email: `booking-${suffix}@example.test`, password }
+    });
+    assert.equal(bookingCustomer.status, 201);
+
     // Exercise multi-shop setup, barber schedules, service availability and conflict-safe booking.
     await pool.query("UPDATE users SET role = 'ADMIN' WHERE id = $1", [registered.body.user.id]);
     const adminLogin = await request('/api/auth/login', {
@@ -211,22 +218,22 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     const startsAt = `${bookingDate}T04:30:00.000Z`; // 10:00 in the shop's Asia/Kolkata timezone.
     const booking = await request('/api/appointments', {
       method: 'POST',
-      token: registered.body.tokens.accessToken,
+      token: bookingCustomer.body.tokens.accessToken,
       body: { shopId, serviceId, staffId, startsAt, customerNotes: 'Integration test booking' }
     });
     assert.equal(booking.status, 201);
     const duplicateBooking = await request('/api/appointments', {
       method: 'POST',
-      token: registered.body.tokens.accessToken,
+      token: bookingCustomer.body.tokens.accessToken,
       body: { shopId, serviceId, staffId, startsAt }
     });
     assert.equal(duplicateBooking.status, 409);
 
-    const myAppointments = await request('/api/appointments/mine', { token: registered.body.tokens.accessToken });
+    const myAppointments = await request('/api/appointments/mine', { token: bookingCustomer.body.tokens.accessToken });
     assert.ok(myAppointments.body.appointments.some(item => String(item.id) === String(booking.body.appointment.id)));
     const cancelled = await request(`/api/appointments/${booking.body.appointment.id}/cancel`, {
       method: 'PATCH',
-      token: registered.body.tokens.accessToken
+      token: bookingCustomer.body.tokens.accessToken
     });
     assert.equal(cancelled.status, 200);
     assert.equal(cancelled.body.appointment.status, 'CANCELLED');
