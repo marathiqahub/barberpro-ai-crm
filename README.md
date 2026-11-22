@@ -151,3 +151,14 @@ A barber's membership is always resolved against the authenticated user; a clien
 - `GET /api/admin/services` and `PATCH /api/admin/services/:serviceId` — service catalogue and updates.
 
 Date ranges are inclusive and evaluated against appointment timestamps. Revenue is the sum of service catalogue prices for COMPLETED appointments; it is operational reporting, not a payment ledger. Payment capture, refunds, taxes and reconciliation require a payment provider and a dedicated payment ledger before being represented as paid revenue.
+
+
+## Customer, barber and admin web workspaces
+
+The browser application is served from `/`. Sign in with a CUSTOMER, BARBER or ADMIN account to open the corresponding workspace. Customer features include shop and service discovery, barber/slot selection, booking, checkout and history. Barber features include daily appointments, customer details and status actions. Admin features include multi-shop operations, staff overview, reports and payment reconciliation/refunds.
+
+## Razorpay payment integration
+
+Apply `db/migrations/004_create_payment_tables.sql` after migration 003. Configure `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` and `RAZORPAY_WEBHOOK_SECRET` in the deployment secret manager. Register `https://YOUR_HOST/api/payments/webhook` with Razorpay for `payment.captured`, `payment.failed`, `refund.processed` and `refund.failed`. Checkout and webhook signatures are verified server-side; webhook event IDs are idempotent. Admin reconciliation is `GET /api/payments/reconciliation`; refunds use `POST /api/payments/:paymentId/refunds`. Never expose secret credentials to browsers. Checkout remains disabled until credentials are configured.
+
+The initial SPA stores bearer tokens in local storage. Before production, move browser authentication behind a same-origin backend-for-frontend using Secure, HttpOnly, SameSite cookies and CSRF protection.
