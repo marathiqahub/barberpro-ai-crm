@@ -14,7 +14,7 @@ services:
     plan: free
     branch: main
     dockerfilePath: ./Dockerfile
-    dockerCommand: npm run db:migrate && npm start
+    dockerCommand: npm run start:render
     healthCheckPath: /health/ready
     autoDeployTrigger: commit
     envVars:
