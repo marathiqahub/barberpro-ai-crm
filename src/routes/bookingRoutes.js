@@ -38,7 +38,7 @@ function createBookingRouter(pool, tokenService) {
     const serviceId = parseId(req.query.serviceId);
     const staffId = req.query.staffId === undefined ? null : parseId(req.query.staffId);
     const date = req.query.date;
-    if (!shopId || !serviceId || (req.query.staffId !== undefined && !staffId) || typeof date !== 'string' || !DATE_RE.test(date)) {
+    if (!shopId || !serviceId || (req.query.staffId !== undefined && !staffId) || typeof date !== 'string' || !DATE_RE.test(date) || new Date(date + 'T00:00:00.000Z').toISOString?.().slice(0, 10) !== date) {
       return res.status(400).json({ error: 'Provide valid shopId, serviceId and date (YYYY-MM-DD); staffId is optional.' });
     }
 
@@ -92,6 +92,8 @@ function createBookingRouter(pool, tokenService) {
         typeof timezone !== 'string' || timezone.length > 80) {
       return res.status(400).json({ error: 'Valid name, URL-safe slug and IANA timezone are required.' });
     }
+    const validTimezone = await pool.query('SELECT 1 FROM pg_timezone_names WHERE name = $1', [timezone]);
+    if (!validTimezone.rowCount) return res.status(400).json({ error: 'timezone must be a valid IANA timezone.' });
     try {
       const result = await pool.query(
         `INSERT INTO shops (name, slug, address, phone, timezone)
@@ -116,8 +118,9 @@ function createBookingRouter(pool, tokenService) {
     }
     const result = await pool.query(
       `INSERT INTO shop_staff (shop_id, user_id, display_name)
-       SELECT $1, u.id, $3 FROM users u
-       WHERE u.id = $2 AND u.role = 'BARBER' AND u.is_active = TRUE
+       SELECT sh.id, u.id, $3 FROM shops sh CROSS JOIN users u
+       WHERE sh.id = $1 AND sh.is_active = TRUE
+         AND u.id = $2 AND u.role = 'BARBER' AND u.is_active = TRUE
        RETURNING id, shop_id, user_id, display_name, is_active`,
       [shopId, userId, displayName.trim()]
     );
@@ -204,7 +207,7 @@ function createBookingRouter(pool, tokenService) {
     const serviceId = parseId(rawServiceId);
     const staffId = parseId(rawStaffId);
     const startMs = Date.parse(startsAt);
-    if (!shopId || !serviceId || !staffId || !Number.isFinite(startMs) || !String(startsAt).includes('T')) {
+    if (!shopId || !serviceId || !staffId || !Number.isFinite(startMs) || typeof startsAt !== 'string' || !startsAt.includes('T') || (customerNotes !== null && (typeof customerNotes !== 'string' || customerNotes.length > 1000))) {
       return res.status(400).json({ error: 'Provide shopId, serviceId, staffId and an ISO startsAt timestamp.' });
     }
     const client = await pool.connect();
