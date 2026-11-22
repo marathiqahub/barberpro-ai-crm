@@ -38,7 +38,7 @@ function createBookingRouter(pool, tokenService) {
     const serviceId = parseId(req.query.serviceId);
     const staffId = req.query.staffId === undefined ? null : parseId(req.query.staffId);
     const date = req.query.date;
-    if (!shopId || !serviceId || (req.query.staffId !== undefined && !staffId) || typeof date !== 'string' || !DATE_RE.test(date) || new Date(date + 'T00:00:00.000Z').toISOString?.().slice(0, 10) !== date) {
+    if (!shopId || !serviceId || (req.query.staffId !== undefined && !staffId) || typeof date !== 'string' || !DATE_RE.test(date) || Number.isNaN(Date.parse(date + 'T00:00:00.000Z')) || new Date(date + 'T00:00:00.000Z').toISOString().slice(0, 10) !== date) {
       return res.status(400).json({ error: 'Provide valid shopId, serviceId and date (YYYY-MM-DD); staffId is optional.' });
     }
 
