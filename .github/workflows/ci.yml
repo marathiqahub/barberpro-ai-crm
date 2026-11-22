@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, feat/auth-jwt-refresh, test/postgres-auth-integration]
+    branches: [main, feat/auth-jwt-refresh, test/postgres-auth-integration, feat/appointment-booking]
   pull_request:
     branches: [main]
 
