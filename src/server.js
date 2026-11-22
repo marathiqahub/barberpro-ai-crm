@@ -28,6 +28,9 @@ const port = Number(process.env.PORT) || 3000;
 let shuttingDown = false;
 
 app.disable('x-powered-by');
+// Render terminates TLS and forwards client IPs through one trusted proxy.
+// This must be set before express-rate-limit middleware reads X-Forwarded-For.
+app.set('trust proxy', 1);
 app.use(helmet({ contentSecurityPolicy: { directives: { scriptSrc: ["'self'", 'https://checkout.razorpay.com'], frameSrc: ["'self'", 'https://checkout.razorpay.com', 'https://api.razorpay.com'], connectSrc: ["'self'", 'https://api.razorpay.com'] } } }));
 const bookingTokens = createTokenService(loadAuthConfig());
 const paymentRouter = createPaymentRouter(pool, bookingTokens);
