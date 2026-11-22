@@ -127,27 +127,11 @@ Health checks: `/health/live` indicates the process is running; `/health/ready` 
 - OpenAPI 3.0 JSON: `http://localhost:3000/openapi.json`
 - Specification source: `src/openapi.json`
 
-## Role-specific application APIs
 
-The shared API now exposes separate authenticated surfaces for the three application experiences. All endpoints use the existing Bearer access token. Public registration remains CUSTOMER-only; ADMIN and BARBER accounts must be provisioned by a trusted operator.
+## Role-based workspaces and Razorpay payments
 
-### Customer app
-The customer foundation is provided by the existing public shop/service/availability discovery endpoints, `POST /api/appointments`, `GET /api/appointments/mine`, and the customer-owned cancellation endpoint. The current payment integration is not enabled; appointment prices are read from the service catalogue and must not be treated as proof of payment.
+The web application is served by Express at `/`. Sign in with a CUSTOMER, BARBER or ADMIN account to open the corresponding workspace. The customer workspace discovers shops/services, books available barber slots, displays appointment/payment history and opens Razorpay Checkout. The barber workspace lists daily appointments and supports confirm, complete and no-show status updates. The admin workspace provides shop/service management, staff and shop reporting, payment reconciliation and captured-payment refunds.
 
-### Barber app
-- `GET /api/barber/dashboard` — the signed-in barber's shop metrics and upcoming assigned appointments, including customer and service details.
-- `GET /api/barber/appointments?from=YYYY-MM-DD&to=YYYY-MM-DD` — appointments assigned to the signed-in barber for a date range (defaults to today).
-- `PATCH /api/barber/appointments/:appointmentId/status` — transition an assigned appointment to CONFIRMED, COMPLETED or NO_SHOW, subject to the booking state machine.
-- `GET /api/barber/availability` — own weekly working hours and future time-off records.
-- `POST /api/barber/time-off` — add time off to one of the signed-in barber's own shop memberships (`staffId`, `startsAt`, `endsAt`, optional `reason`).
+Apply `db/migrations/004_create_payment_tables.sql` after migration 003. Configure `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` and `RAZORPAY_WEBHOOK_SECRET` in the deployment secret manager. Configure webhook URL `https://YOUR_HOST/api/payments/webhook` for `payment.captured`, `payment.failed`, `refund.processed` and `refund.failed`. Checkout and webhook signatures are verified server-side; webhook event IDs are idempotent. Admin reconciliation is `GET /api/payments/reconciliation`; refunds use `POST /api/payments/:paymentId/refunds`. Never expose secret credentials to browsers. Checkout remains disabled until credentials are configured.
 
-A barber's membership is always resolved against the authenticated user; a client cannot read or update another barber's appointments or availability.
-
-### Admin dashboard
-- `GET /api/admin/dashboard?from=YYYY-MM-DD&to=YYYY-MM-DD` — cross-shop totals and shop-level activity.
-- `GET /api/admin/shops` and `PATCH /api/admin/shops/:shopId` — list and update shop profile/active status.
-- `GET /api/admin/staff-performance?from=...&to=...` — appointment outcomes and completed-service revenue per barber.
-- `GET /api/admin/reports?from=...&to=...` — shop-level appointment and revenue report.
-- `GET /api/admin/services` and `PATCH /api/admin/services/:serviceId` — service catalogue and updates.
-
-Date ranges are inclusive and evaluated against appointment timestamps. Revenue is the sum of service catalogue prices for COMPLETED appointments; it is operational reporting, not a payment ledger. Payment capture, refunds, taxes and reconciliation require a payment provider and a dedicated payment ledger before being represented as paid revenue.
+Role APIs include `GET /api/barber/appointments`, `PATCH /api/barber/appointments/:id/status`, `GET /api/admin/overview` and `GET /api/admin/reports`. This initial browser client stores tokens in local storage; production browser deployments should move authentication into a same-origin backend-for-frontend using Secure, HttpOnly, SameSite cookies and CSRF protection.

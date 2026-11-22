@@ -6,6 +6,8 @@ const openapiSpec = require('./openapi.json');
 const { createAuthRouter } = require('./routes/authRoutes');
 const { createBookingRouter } = require('./routes/bookingRoutes');
 const { createDashboardRouter } = require('./routes/dashboardRoutes');
+const { createWorkspaceRouter } = require('./routes/workspaceRoutes');
+const { createPaymentRouter } = require('./routes/paymentRoutes');
 const { loadAuthConfig } = require('./auth/config');
 const { createTokenService } = require('./auth/tokens');
 const { Pool } = require('pg');
@@ -27,7 +29,10 @@ const port = Number(process.env.PORT) || 3000;
 let shuttingDown = false;
 
 app.disable('x-powered-by');
-app.use(helmet());
+app.use(helmet({ contentSecurityPolicy: { directives: { scriptSrc: ["'self'", 'https://checkout.razorpay.com'], frameSrc: ["'self'", 'https://checkout.razorpay.com', 'https://api.razorpay.com'], connectSrc: ["'self'", 'https://api.razorpay.com'] } } }));
+const bookingTokens = createTokenService(loadAuthConfig());
+const paymentRouter = createPaymentRouter(pool, bookingTokens);
+app.use('/api/payments', (req, res, next) => req.path === '/webhook' ? paymentRouter(req, res, next) : next()); // raw webhook only before express.json
 app.use(express.json({ limit: '10kb' }));
 
 app.get('/health/live', (req, res) => res.status(200).json({ status: 'ok' }));
@@ -50,9 +55,10 @@ app.use('/api-docs', (req, res, next) => {
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openapiSpec));
 
 app.use('/api/auth', createAuthRouter(pool));
-const bookingTokens = createTokenService(loadAuthConfig());
 app.use('/api', createBookingRouter(pool, bookingTokens));
+app.use('/api', createWorkspaceRouter(pool, bookingTokens));
 app.use('/api', createDashboardRouter(pool, bookingTokens));
+app.use('/api/payments', paymentRouter);
 
 app.post(
   '/api/customers',
@@ -100,6 +106,8 @@ app.post(
   }
 );
 
+app.use(express.static(require('node:path').join(__dirname, '..', 'public'), { index: 'index.html' }));
+app.get('*', (req, res, next) => { if (req.path.startsWith('/api/')) return next(); return res.sendFile(require('node:path').join(__dirname, '..', 'public', 'index.html')); });
 app.use((error, req, res, next) => {
   if (error.type === 'entity.parse.failed') {
     return res.status(400).json({ error: 'Request body must be valid JSON.' });
