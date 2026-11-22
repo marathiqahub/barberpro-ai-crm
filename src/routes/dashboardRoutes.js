@@ -52,13 +52,14 @@ function createDashboardRouter(pool, tokenService) {
       `SELECT
          (SELECT COUNT(*)::int FROM shops WHERE is_active = TRUE) AS active_shops,
          (SELECT COUNT(*)::int FROM shop_staff WHERE is_active = TRUE) AS active_barbers,
-         (SELECT COUNT(*)::int FROM appointments WHERE starts_at >= $1::date AND starts_at < ($2::date + 1)) AS appointments,
-         (SELECT COUNT(*)::int FROM appointments WHERE starts_at >= $1::date AND starts_at < ($2::date + 1) AND status = 'COMPLETED') AS completed,
-         (SELECT COUNT(*)::int FROM appointments WHERE starts_at >= $1::date AND starts_at < ($2::date + 1) AND status = 'CANCELLED') AS cancelled,
-         (SELECT COUNT(*)::int FROM appointments WHERE starts_at >= $1::date AND starts_at < ($2::date + 1) AND status = 'NO_SHOW') AS no_shows,
-         (SELECT COALESCE(SUM(s.price), 0)::numeric(12,2)
-            FROM appointments a JOIN services s ON s.id = a.service_id
-           WHERE a.starts_at >= $1::date AND a.starts_at < ($2::date + 1) AND a.status = 'COMPLETED') AS gross_revenue`,
+         (SELECT COUNT(*)::int FROM appointments a JOIN shops sh ON sh.id=a.shop_id WHERE (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $1::date AND $2::date) AS appointments,
+         (SELECT COUNT(*)::int FROM appointments a JOIN shops sh ON sh.id=a.shop_id WHERE (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $1::date AND $2::date AND a.status = 'COMPLETED') AS completed,
+         (SELECT COUNT(*)::int FROM appointments a JOIN shops sh ON sh.id=a.shop_id WHERE (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $1::date AND $2::date AND a.status = 'CANCELLED') AS cancelled,
+         (SELECT COUNT(*)::int FROM appointments a JOIN shops sh ON sh.id=a.shop_id WHERE (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $1::date AND $2::date AND a.status = 'NO_SHOW') AS no_shows,
+         (SELECT COALESCE(SUM(p.amount_paise - COALESCE(refunds.refunded_paise,0)), 0)::bigint
+            FROM payments p JOIN appointments a ON a.id=p.appointment_id
+            LEFT JOIN (SELECT payment_id,SUM(amount_paise) AS refunded_paise FROM payment_refunds WHERE status='PROCESSED' GROUP BY payment_id) refunds ON refunds.payment_id=p.id
+           WHERE (a.starts_at AT TIME ZONE (SELECT timezone FROM shops WHERE id=a.shop_id))::date BETWEEN $1::date AND $2::date AND p.status IN ('CAPTURED','PARTIALLY_REFUNDED','REFUNDED')) AS captured_revenue_paise`,
       [from, to]
     );
     const shops = await pool.query(
@@ -117,15 +118,16 @@ function createDashboardRouter(pool, tokenService) {
     if (!period) return;
     const result = await pool.query(
       `SELECT sh.id AS shop_id, sh.name AS shop_name, st.id AS staff_id, st.display_name,
-              COUNT(a.id)::int AS appointments,
-              COUNT(a.id) FILTER (WHERE a.status = 'COMPLETED')::int AS completed,
-              COUNT(a.id) FILTER (WHERE a.status = 'NO_SHOW')::int AS no_shows,
-              COALESCE(SUM(s.price) FILTER (WHERE a.status = 'COMPLETED'),0)::numeric(12,2) AS revenue
+              COUNT(DISTINCT a.id)::int AS appointments,
+              COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'COMPLETED')::int AS completed,
+              COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'NO_SHOW')::int AS no_shows,
+              COALESCE(SUM(p.amount_paise - COALESCE(refunds.refunded_paise,0)) FILTER (WHERE p.status IN ('CAPTURED','PARTIALLY_REFUNDED','REFUNDED')),0)::bigint AS captured_revenue_paise
        FROM shop_staff st JOIN shops sh ON sh.id = st.shop_id
        LEFT JOIN appointments a ON a.staff_id = st.id
-         AND a.starts_at >= $1::date AND a.starts_at < ($2::date + 1)
-       LEFT JOIN services s ON s.id = a.service_id
-       GROUP BY sh.id, sh.name, st.id, st.display_name ORDER BY sh.name, revenue DESC, st.display_name`,
+         AND (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $1::date AND $2::date
+       LEFT JOIN payments p ON p.appointment_id = a.id
+       LEFT JOIN (SELECT payment_id,SUM(amount_paise) AS refunded_paise FROM payment_refunds WHERE status='PROCESSED' GROUP BY payment_id) refunds ON refunds.payment_id=p.id
+       GROUP BY sh.id, sh.name, st.id, st.display_name ORDER BY sh.name, captured_revenue_paise DESC, st.display_name`,
       [period.from, period.to]
     );
     res.json({ period, staff: result.rows });
@@ -136,14 +138,15 @@ function createDashboardRouter(pool, tokenService) {
     if (!period) return;
     const result = await pool.query(
       `SELECT sh.id AS shop_id, sh.name AS shop_name,
-              COUNT(a.id)::int AS total_appointments,
-              COUNT(a.id) FILTER (WHERE a.status = 'COMPLETED')::int AS completed,
-              COUNT(a.id) FILTER (WHERE a.status = 'CANCELLED')::int AS cancelled,
-              COUNT(a.id) FILTER (WHERE a.status = 'NO_SHOW')::int AS no_shows,
-              COALESCE(SUM(s.price) FILTER (WHERE a.status = 'COMPLETED'),0)::numeric(12,2) AS revenue
+              COUNT(DISTINCT a.id)::int AS total_appointments,
+              COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'COMPLETED')::int AS completed,
+              COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'CANCELLED')::int AS cancelled,
+              COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'NO_SHOW')::int AS no_shows,
+              COALESCE(SUM(p.amount_paise - COALESCE(refunds.refunded_paise,0)) FILTER (WHERE p.status IN ('CAPTURED','PARTIALLY_REFUNDED','REFUNDED')),0)::bigint AS captured_revenue_paise
        FROM shops sh LEFT JOIN appointments a ON a.shop_id = sh.id
-         AND a.starts_at >= $1::date AND a.starts_at < ($2::date + 1)
-       LEFT JOIN services s ON s.id = a.service_id
+         AND (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $1::date AND $2::date
+       LEFT JOIN payments p ON p.appointment_id = a.id
+       LEFT JOIN (SELECT payment_id,SUM(amount_paise) AS refunded_paise FROM payment_refunds WHERE status='PROCESSED' GROUP BY payment_id) refunds ON refunds.payment_id=p.id
        GROUP BY sh.id, sh.name ORDER BY sh.name`,
       [period.from, period.to]
     );
@@ -211,6 +214,8 @@ function createDashboardRouter(pool, tokenService) {
   router.get('/barber/appointments', ...barber, asyncRoute(async (req, res) => {
     const period = range(req, res);
     if (!period) return;
+    const shopId = req.query.shopId === undefined ? null : id(req.query.shopId);
+    if (req.query.shopId !== undefined && !shopId) return res.status(400).json({ error: 'shopId must be a positive integer.' });
     const result = await pool.query(
       `SELECT a.id,a.starts_at,a.ends_at,a.status,a.customer_notes,
               u.id AS customer_id,u.name AS customer_name,u.email AS customer_email,
@@ -219,9 +224,10 @@ function createDashboardRouter(pool, tokenService) {
        JOIN shops sh ON sh.id=a.shop_id JOIN services sv ON sv.id=a.service_id
        JOIN users u ON u.id=a.customer_id
        WHERE st.user_id=$1 AND st.is_active=TRUE
-         AND a.starts_at >= $2::date AND a.starts_at < ($3::date + 1)
+         AND (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $2::date AND $3::date
+         AND ($4::bigint IS NULL OR st.shop_id=$4)
        ORDER BY a.starts_at`,
-      [req.user.id, period.from, period.to]
+      [req.user.id, period.from, period.to, shopId]
     );
     res.json({ period, appointments: result.rows });
   }));
