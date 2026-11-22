@@ -97,7 +97,7 @@ function createOperatorRouter(pool) {
       await client.query('COMMIT');
       return res.status(201).json({
         message: 'Initial accounts and shop provisioned. Activation tokens are shown once; share each only with its intended user.',
-        activationEndpoint: '/api/auth/activate',
+        activationEndpoint: '/api/operator/activate',
         activationTokens: activations,
         shop: shopResult.rows[0],
         barberLinked: { name: barber.name, shop: shopResult.rows[0].name }
