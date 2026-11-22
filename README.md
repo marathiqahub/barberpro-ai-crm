@@ -126,3 +126,12 @@ Health checks: `/health/live` indicates the process is running; `/health/ready` 
 - Swagger UI: `http://localhost:3000/api-docs`
 - OpenAPI 3.0 JSON: `http://localhost:3000/openapi.json`
 - Specification source: `src/openapi.json`
+
+
+## Role-based workspaces and Razorpay payments
+
+The web application is served by Express at `/`. Sign in with a CUSTOMER, BARBER or ADMIN account to open the corresponding workspace. The customer workspace discovers shops/services, books available barber slots, displays appointment/payment history and opens Razorpay Checkout. The barber workspace lists daily appointments and supports confirm, complete and no-show status updates. The admin workspace provides shop/service management, staff and shop reporting, payment reconciliation and captured-payment refunds.
+
+Apply `db/migrations/004_create_payment_tables.sql` after migration 003. Configure `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` and `RAZORPAY_WEBHOOK_SECRET` in the deployment secret manager. Configure webhook URL `https://YOUR_HOST/api/payments/webhook` for `payment.captured`, `payment.failed`, `refund.processed` and `refund.failed`. Checkout and webhook signatures are verified server-side; webhook event IDs are idempotent. Admin reconciliation is `GET /api/payments/reconciliation`; refunds use `POST /api/payments/:paymentId/refunds`. Never expose secret credentials to browsers. Checkout remains disabled until credentials are configured.
+
+Role APIs include `GET /api/barber/appointments`, `PATCH /api/barber/appointments/:id/status`, `GET /api/admin/overview` and `GET /api/admin/reports`. This initial browser client stores tokens in local storage; production browser deployments should move authentication into a same-origin backend-for-frontend using Secure, HttpOnly, SameSite cookies and CSRF protection.
