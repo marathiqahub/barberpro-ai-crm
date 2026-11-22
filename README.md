@@ -34,7 +34,7 @@ docker compose down
 docker compose down -v
 ```
 
-PostgreSQL runs SQL files in `db/migrations` only when initializing an empty data volume. For an existing deployment, apply the new migration once using your database migration process (for example, `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/002_create_auth_tables.sql`). Do not delete the existing database volume to apply a schema change.
+PostgreSQL runs SQL files in `db/migrations` only when initializing an empty data volume. For an existing deployment, apply the new migration once using your database migration process (for example, `psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f db/migrations/003_create_booking_tables.sql`). Do not delete the existing database volume to apply a schema change.
 
 ## Local development
 
