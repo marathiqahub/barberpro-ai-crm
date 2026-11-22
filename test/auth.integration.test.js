@@ -338,6 +338,14 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     const refundedRow = afterRefund.body.payments.find(item => String(item.id) === String(capturedRow.id));
     assert.equal(refundedRow.status, 'REFUNDED');
     assert.equal(Number(refundedRow.refunded_paise), 35000);
+    const netReport = await request(`/api/admin/reports?from=${bookingDate}&to=${bookingDate}`, {
+      token: adminLogin.body.tokens.accessToken
+    });
+    assert.equal(Number(netReport.body.report.find(item => String(item.shop_id) === String(shopId)).captured_revenue_paise), 0);
+    const netStaffReport = await request(`/api/admin/staff-performance?from=${bookingDate}&to=${bookingDate}`, {
+      token: adminLogin.body.tokens.accessToken
+    });
+    assert.equal(Number(netStaffReport.body.staff.find(item => String(item.staff_id) === String(staffId)).captured_revenue_paise), 0);
 
     // Customer cancellation remains available for a separate unpaid booking.
     const secondStartsAt = `${bookingDate}T05:00:00.000Z`;
