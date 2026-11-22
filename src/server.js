@@ -7,6 +7,7 @@ const { createAuthRouter } = require('./routes/authRoutes');
 const { createBookingRouter } = require('./routes/bookingRoutes');
 const { createDashboardRouter } = require('./routes/dashboardRoutes');
 const { createPaymentRouter } = require('./routes/paymentRoutes');
+const { createOperatorRouter } = require('./routes/operatorRoutes');
 const { loadAuthConfig } = require('./auth/config');
 const { createTokenService } = require('./auth/tokens');
 const { Pool } = require('pg');
@@ -57,6 +58,7 @@ app.use('/api-docs', (req, res, next) => {
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openapiSpec));
 
 app.use('/api/auth', createAuthRouter(pool));
+app.use('/api/operator', createOperatorRouter(pool));
 app.use('/api', createBookingRouter(pool, bookingTokens));
 app.use('/api', createDashboardRouter(pool, bookingTokens));
 app.use('/api/payments', paymentRouter);

@@ -19,7 +19,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
   const baseUrl = `http://127.0.0.1:${port}`;
 
   try {
-    for (const migration of ['001_create_customers.sql', '002_create_auth_tables.sql', '003_create_booking_tables.sql', '004_create_payment_tables.sql']) {
+    for (const migration of ['001_create_customers.sql', '002_create_auth_tables.sql', '003_create_booking_tables.sql', '004_create_payment_tables.sql', '005_create_account_activation_tokens.sql']) {
       const sql = fs.readFileSync(path.join(__dirname, '..', 'db', 'migrations', migration), 'utf8');
       await pool.query(sql);
     }
@@ -62,6 +62,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
         RAZORPAY_KEY_ID: 'rzp_test_integration_key',
         RAZORPAY_KEY_SECRET: 'integration-razorpay-key-secret',
         RAZORPAY_WEBHOOK_SECRET: 'integration-razorpay-webhook-secret',
+        OPERATOR_PROVISIONING_SECRET: 'integration-operator-secret-with-at-least-32-bytes',
         NODE_OPTIONS: [process.env.NODE_OPTIONS, '--require', mockPath].filter(Boolean).join(' ')
       },
       stdio: ['ignore', 'pipe', 'pipe']
