@@ -122,6 +122,73 @@ function createDashboardRouter(pool, tokenService) {
     res.json({ shop: result.rows[0] });
   }));
 
+  // Barbers manage recurring hours only for their own shop memberships.
+  router.get('/barber/hours', ...barber, asyncRoute(async (req, res) => {
+    const staffId = id(req.query.staffId);
+    if (!staffId) return res.status(400).json({ error: 'Valid staffId is required.' });
+    const owned = await pool.query(
+      'SELECT id FROM shop_staff WHERE id=$1 AND user_id=$2 AND is_active=TRUE',
+      [staffId, req.user.id]
+    );
+    if (!owned.rowCount) return res.status(404).json({ error: 'Your active shop assignment was not found.' });
+    const result = await pool.query(
+      'SELECT staff_id,day_of_week,opens_at,closes_at,is_active FROM staff_working_hours WHERE staff_id=$1 ORDER BY day_of_week',
+      [staffId]
+    );
+    res.json({ staffId, weeklySchedule: result.rows });
+  }));
+
+  router.put('/barber/hours/:staffId/weekly', ...barber, asyncRoute(async (req, res) => {
+    const staffId = id(req.params.staffId);
+    const days = req.body?.weeklySchedule;
+    const timePattern = /^([01]\\d|2[0-3]):[0-5]\\d$/;
+    if (!staffId || !Array.isArray(days) || days.length !== 7) {
+      return res.status(400).json({ error: 'Provide all seven days of the week.' });
+    }
+    const seen = new Set();
+    for (const day of days) {
+      if (!day || !Number.isInteger(day.dayOfWeek) || day.dayOfWeek < 0 || day.dayOfWeek > 6 ||
+          seen.has(day.dayOfWeek) || typeof day.opensAt !== 'string' || !timePattern.test(day.opensAt) ||
+          typeof day.closesAt !== 'string' || !timePattern.test(day.closesAt) ||
+          day.opensAt >= day.closesAt || typeof day.isActive !== 'boolean') {
+        return res.status(400).json({ error: 'Each day needs valid opening/closing times and a working-day or day-off selection.' });
+      }
+      seen.add(day.dayOfWeek);
+    }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const owned = await client.query(
+        'SELECT id FROM shop_staff WHERE id=$1 AND user_id=$2 AND is_active=TRUE FOR UPDATE',
+        [staffId, req.user.id]
+      );
+      if (!owned.rowCount) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Your active shop assignment was not found.' });
+      }
+      for (const day of days) {
+        await client.query(
+          `INSERT INTO staff_working_hours (staff_id,day_of_week,opens_at,closes_at,is_active)
+           VALUES ($1,$2,$3::time,$4::time,$5)
+           ON CONFLICT (staff_id,day_of_week) DO UPDATE SET
+             opens_at=EXCLUDED.opens_at,closes_at=EXCLUDED.closes_at,is_active=EXCLUDED.is_active`,
+          [staffId,day.dayOfWeek,day.opensAt,day.closesAt,day.isActive]
+        );
+      }
+      const result = await client.query(
+        'SELECT staff_id,day_of_week,opens_at,closes_at,is_active FROM staff_working_hours WHERE staff_id=$1 ORDER BY day_of_week',
+        [staffId]
+      );
+      await client.query('COMMIT');
+      res.json({ staffId, weeklySchedule: result.rows, recurring: true });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }));
+
   router.get('/admin/staff-performance', ...admin, asyncRoute(async (req, res) => {
     const period = range(req, res);
     if (!period) return;
