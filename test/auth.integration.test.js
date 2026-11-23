@@ -360,16 +360,16 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     assert.equal(duplicateBooking.status, 409);
 
     // The same customer can book and view appointments from a second shop.
-    const secondBooking = await request('/api/appointments', {
+    const annexBooking = await request('/api/appointments', {
       method: 'POST', token: bookingCustomer.body.tokens.accessToken,
       body: { shopId: secondShopId, serviceId: secondServiceId, staffId: secondStaffId, startsAt }
     });
-    assert.equal(secondBooking.status, 201);
+    assert.equal(annexBooking.status, 201);
     const myAppointments = await request('/api/appointments/mine', { token: bookingCustomer.body.tokens.accessToken });
     assert.ok(myAppointments.body.appointments.some(item => String(item.id) === String(booking.body.appointment.id)));
-    assert.ok(myAppointments.body.appointments.some(item => String(item.id) === String(secondBooking.body.appointment.id)));
+    assert.ok(myAppointments.body.appointments.some(item => String(item.id) === String(annexBooking.body.appointment.id)));
     assert.ok(myAppointments.body.appointments.some(item => item.shop_name === 'Integration Second Shop'));
-    const secondShopCancel = await request(`/api/appointments/${secondBooking.body.appointment.id}/cancel`, {
+    const secondShopCancel = await request(`/api/appointments/${annexBooking.body.appointment.id}/cancel`, {
       method: 'PATCH', token: bookingCustomer.body.tokens.accessToken
     });
     assert.equal(secondShopCancel.status, 200);
