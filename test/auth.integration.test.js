@@ -246,6 +246,31 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     });
     assert.equal(hours.status, 200);
 
+    // A complete seven-day schedule is saved atomically and recurs each week.
+    const weeklySchedule = Array.from({ length: 7 }, (_, dayOfWeek) => ({
+      dayOfWeek, opensAt: '00:00', closesAt: '23:59', isActive: true
+    }));
+    const closedDay = (dayOfWeek + 1) % 7;
+    weeklySchedule[closedDay].isActive = false; // One non-booking weekday is closed.
+    const savedWeek = await request(`/api/staff/${staffId}/hours/weekly`, {
+      method: 'PUT', token: adminLogin.body.tokens.accessToken,
+      body: { weeklySchedule }
+    });
+    assert.equal(savedWeek.status, 200);
+    assert.equal(savedWeek.body.recurring, true);
+    assert.equal(savedWeek.body.weeklySchedule.length, 7);
+    assert.equal(savedWeek.body.weeklySchedule[closedDay].is_active, false);
+    const readWeek = await request(`/api/staff/${staffId}/hours`, {
+      token: adminLogin.body.tokens.accessToken
+    });
+    assert.equal(readWeek.status, 200);
+    assert.equal(readWeek.body.weeklySchedule.length, 7);
+    const invalidWeek = await request(`/api/staff/${staffId}/hours/weekly`, {
+      method: 'PUT', token: adminLogin.body.tokens.accessToken,
+      body: { weeklySchedule: weeklySchedule.slice(0, 6) }
+    });
+    assert.equal(invalidWeek.status, 400);
+
     const availability = await request(`/api/shops/${shopId}/availability?serviceId=${serviceId}&staffId=${staffId}&date=${bookingDate}`);
     assert.equal(availability.status, 200);
     assert.ok(availability.body.slots.length > 0);
