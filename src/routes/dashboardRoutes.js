@@ -87,6 +87,15 @@ function createDashboardRouter(pool, tokenService) {
     res.json({ shops: result.rows });
   }));
 
+  router.get('/admin/barbers', ...admin, asyncRoute(async (req, res) => {
+    const result = await pool.query(
+      `SELECT id,name,email FROM users
+       WHERE role='BARBER' AND is_active=TRUE
+       ORDER BY name,email`
+    );
+    res.json({ barbers: result.rows });
+  }));
+
   router.patch('/admin/shops/:shopId', ...admin, asyncRoute(async (req, res) => {
     const shopId = id(req.params.shopId);
     const { name, address, phone, timezone, isActive } = req.body || {};
