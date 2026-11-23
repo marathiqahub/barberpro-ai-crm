@@ -320,6 +320,30 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     );
     assert.equal(barberAppointments.status, 200);
     assert.ok(barberAppointments.body.appointments.some(item => String(item.id) === String(booking.body.appointment.id)));
+
+    // Barber self-service break management: own membership only, no overlap with
+    // booked appointments, visible in availability, and cancellable by its owner.
+    const overlappingBreak = await request('/api/barber/time-off', {
+      method: 'POST', token: barberLogin.body.tokens.accessToken,
+      body: { staffId, startsAt: booking.body.appointment.starts_at, endsAt: booking.body.appointment.ends_at, reason: 'Should be rejected' }
+    });
+    assert.equal(overlappingBreak.status, 409);
+    const createdBreak = await request('/api/barber/time-off', {
+      method: 'POST', token: barberLogin.body.tokens.accessToken,
+      body: { staffId, startsAt: `${bookingDate}T07:30:00.000Z`, endsAt: `${bookingDate}T08:00:00.000Z`, reason: 'Lunch break' }
+    });
+    assert.equal(createdBreak.status, 201);
+    assert.equal(createdBreak.body.timeOff.reason, 'Lunch break');
+    const barberAvailability = await request('/api/barber/availability', {
+      token: barberLogin.body.tokens.accessToken
+    });
+    assert.ok(barberAvailability.body.timeOff.some(item => String(item.id) === String(createdBreak.body.timeOff.id)));
+    const removedBreak = await request(`/api/barber/time-off/${createdBreak.body.timeOff.id}`, {
+      method: 'DELETE', token: barberLogin.body.tokens.accessToken
+    });
+    assert.equal(removedBreak.status, 200);
+    assert.equal(removedBreak.body.deleted, true);
+
     const invalidTransition = await request(`/api/barber/appointments/${booking.body.appointment.id}/status`, {
       method: 'PATCH', token: barberLogin.body.tokens.accessToken, body: { status: 'COMPLETED' }
     });
