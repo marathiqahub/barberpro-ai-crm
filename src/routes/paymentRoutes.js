@@ -41,7 +41,7 @@ function createPaymentRouter(pool, tokenService) {
         `SELECT a.id, a.customer_id, a.status, sv.price
          FROM appointments a JOIN services sv ON sv.id=a.service_id
          WHERE a.id=$1 AND a.customer_id=$2 FOR UPDATE OF a`, [appointmentId, req.user.id]);
-      if (!found.rowCount || !['BOOKED','CONFIRMED'].includes(found.rows[0].status)) {
+      if (!found.rowCount || !['BOOKED','CONFIRMED','COMPLETED'].includes(found.rows[0].status)) {
         await client.query('ROLLBACK'); return res.status(404).json({ error: 'Payable appointment not found.' });
       }
       const existing = await client.query('SELECT id, provider_order_id, amount_paise, currency, status, provider_payload FROM payments WHERE appointment_id=$1', [appointmentId]);
