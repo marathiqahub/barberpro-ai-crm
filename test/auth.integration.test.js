@@ -250,7 +250,8 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     const weeklySchedule = Array.from({ length: 7 }, (_, dayOfWeek) => ({
       dayOfWeek, opensAt: '00:00', closesAt: '23:59', isActive: true
     }));
-    weeklySchedule[0].isActive = false; // Sunday closed.
+    const closedDay = (dayOfWeek + 1) % 7;
+    weeklySchedule[closedDay].isActive = false; // One non-booking weekday is closed.
     const savedWeek = await request(`/api/staff/${staffId}/hours/weekly`, {
       method: 'PUT', token: adminLogin.body.tokens.accessToken,
       body: { weeklySchedule }
@@ -258,7 +259,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     assert.equal(savedWeek.status, 200);
     assert.equal(savedWeek.body.recurring, true);
     assert.equal(savedWeek.body.weeklySchedule.length, 7);
-    assert.equal(savedWeek.body.weeklySchedule[0].is_active, false);
+    assert.equal(savedWeek.body.weeklySchedule[closedDay].is_active, false);
     const readWeek = await request(`/api/staff/${staffId}/hours`, {
       token: adminLogin.body.tokens.accessToken
     });
