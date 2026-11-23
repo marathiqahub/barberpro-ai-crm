@@ -373,7 +373,16 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
       token: adminLogin.body.tokens.accessToken
     });
     assert.equal(staffReport.status, 200);
-    assert.ok(staffReport.body.staff.some(item => String(item.staff_id) === String(staffId) && Number(item.completed) === 1));
+    const staffMetric = staffReport.body.staff.find(item => String(item.staff_id) === String(staffId));
+    assert.ok(staffMetric);
+    assert.equal(Number(staffMetric.completed), 1);
+    assert.equal(Number(staffMetric.appointments), 1);
+    assert.equal(Number(staffMetric.completion_rate), 100);
+    assert.equal(Number(staffMetric.captured_revenue_paise), 35000);
+    assert.equal(Number(staffMetric.revenue_per_completed_paise), 35000);
+    assert.ok(staffReport.body.comparisonPeriod.from);
+    assert.ok(staffMetric.comparison);
+    assert.equal(Number(staffMetric.previous_appointments), 0);
     const shopReport = await request(`/api/admin/reports?from=${bookingDate}&to=${bookingDate}`, {
       token: adminLogin.body.tokens.accessToken
     });
