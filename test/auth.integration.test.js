@@ -228,6 +228,9 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     });
     assert.equal(barberRegistration.status, 201);
     await pool.query("UPDATE users SET role = 'BARBER' WHERE id = $1", [barberRegistration.body.user.id]);
+    const activeBarbers = await request('/api/admin/barbers', { token: adminLogin.body.tokens.accessToken });
+    assert.equal(activeBarbers.status, 200);
+    assert.ok(activeBarbers.body.barbers.some(item => String(item.id) === String(barberRegistration.body.user.id)));
 
     const serviceResponse = await request(`/api/shops/${shopId}/services`, {
       method: 'POST',
