@@ -338,6 +338,11 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
       token: barberLogin.body.tokens.accessToken
     });
     assert.ok(barberAvailability.body.timeOff.some(item => String(item.id) === String(createdBreak.body.timeOff.id)));
+    const slotsDuringBreak = await request(
+      `/api/shops/${shopId}/availability?serviceId=${serviceId}&staffId=${staffId}&date=${bookingDate}`
+    );
+    assert.equal(slotsDuringBreak.status, 200);
+    assert.ok(!slotsDuringBreak.body.slots.some(slot => new Date(slot.starts_at).toISOString() === `${bookingDate}T07:30:00.000Z`));
     const removedBreak = await request(`/api/barber/time-off/${createdBreak.body.timeOff.id}`, {
       method: 'DELETE', token: barberLogin.body.tokens.accessToken
     });
