@@ -456,6 +456,9 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
       token: adminLogin.body.tokens.accessToken
     });
     assert.equal(adminDashboard.status, 200);
+    assert.ok(Number(adminDashboard.body.metrics.active_shops) >= 2);
+    assert.ok(adminDashboard.body.shops.some(item => String(item.id) === String(shopId)));
+    assert.ok(adminDashboard.body.shops.some(item => String(item.id) === String(secondShopId)));
     assert.ok(Number(adminDashboard.body.metrics.completed) >= 1);
     assert.equal(Number(adminDashboard.body.metrics.captured_revenue_paise), 35000);
     const staffReport = await request(`/api/admin/staff-performance?from=${bookingDate}&to=${bookingDate}`, {
@@ -476,6 +479,8 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
       token: adminLogin.body.tokens.accessToken
     });
     assert.equal(shopReport.status, 200);
+    assert.ok(shopReport.body.report.some(item => String(item.shop_id) === String(shopId)));
+    assert.ok(shopReport.body.report.some(item => String(item.shop_id) === String(secondShopId)));
     assert.equal(Number(shopReport.body.report.find(item => String(item.shop_id) === String(shopId)).captured_revenue_paise), 35000);
     const reconciliation = await request('/api/payments/reconciliation', { token: adminLogin.body.tokens.accessToken });
     assert.equal(reconciliation.status, 200);
