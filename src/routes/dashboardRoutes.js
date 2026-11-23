@@ -116,21 +116,67 @@ function createDashboardRouter(pool, tokenService) {
   router.get('/admin/staff-performance', ...admin, asyncRoute(async (req, res) => {
     const period = range(req, res);
     if (!period) return;
+    const fromDate = new Date(period.from + 'T00:00:00.000Z');
+    const toDate = new Date(period.to + 'T00:00:00.000Z');
+    const days = Math.round((toDate - fromDate) / 86400000) + 1;
+    const previousFrom = new Date(fromDate.getTime() - days * 86400000).toISOString().slice(0, 10);
+    const previousTo = new Date(fromDate.getTime() - 86400000).toISOString().slice(0, 10);
     const result = await pool.query(
-      `SELECT sh.id AS shop_id, sh.name AS shop_name, st.id AS staff_id, st.display_name,
-              COUNT(DISTINCT a.id)::int AS appointments,
-              COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'COMPLETED')::int AS completed,
-              COUNT(DISTINCT a.id) FILTER (WHERE a.status = 'NO_SHOW')::int AS no_shows,
-              COALESCE(SUM(p.amount_paise - COALESCE(refunds.refunded_paise,0)) FILTER (WHERE p.status IN ('CAPTURED','PARTIALLY_REFUNDED','REFUNDED')),0)::bigint AS captured_revenue_paise
-       FROM shop_staff st JOIN shops sh ON sh.id = st.shop_id
-       LEFT JOIN appointments a ON a.staff_id = st.id
-         AND (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $1::date AND $2::date
-       LEFT JOIN payments p ON p.appointment_id = a.id
-       LEFT JOIN (SELECT payment_id,SUM(amount_paise) AS refunded_paise FROM payment_refunds WHERE status='PROCESSED' GROUP BY payment_id) refunds ON refunds.payment_id=p.id
-       GROUP BY sh.id, sh.name, st.id, st.display_name ORDER BY sh.name, captured_revenue_paise DESC, st.display_name`,
-      [period.from, period.to]
+      `WITH refund_totals AS (
+         SELECT payment_id, SUM(amount_paise)::bigint AS refunded_paise
+         FROM payment_refunds WHERE status='PROCESSED' GROUP BY payment_id
+       ), staff_periods AS (
+         SELECT sh.id AS shop_id, sh.name AS shop_name, st.id AS staff_id, st.display_name,
+           COUNT(a.id) FILTER (WHERE (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $1::date AND $2::date)::int AS appointments,
+           COUNT(a.id) FILTER (WHERE (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $1::date AND $2::date AND a.status='COMPLETED')::int AS completed,
+           COUNT(a.id) FILTER (WHERE (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $1::date AND $2::date AND a.status='CANCELLED')::int AS cancelled,
+           COUNT(a.id) FILTER (WHERE (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $1::date AND $2::date AND a.status='NO_SHOW')::int AS no_shows,
+           COUNT(a.id) FILTER (WHERE (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $1::date AND $2::date AND a.status IN ('BOOKED','CONFIRMED'))::int AS upcoming_or_pending,
+           COALESCE(SUM(p.amount_paise - COALESCE(rt.refunded_paise,0)) FILTER (
+             WHERE (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $1::date AND $2::date
+               AND p.status IN ('CAPTURED','PARTIALLY_REFUNDED','REFUNDED')),0)::bigint AS captured_revenue_paise,
+           COUNT(a.id) FILTER (WHERE (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $3::date AND $4::date)::int AS previous_appointments,
+           COUNT(a.id) FILTER (WHERE (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $3::date AND $4::date AND a.status='COMPLETED')::int AS previous_completed,
+           COUNT(a.id) FILTER (WHERE (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $3::date AND $4::date AND a.status='CANCELLED')::int AS previous_cancelled,
+           COUNT(a.id) FILTER (WHERE (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $3::date AND $4::date AND a.status='NO_SHOW')::int AS previous_no_shows,
+           COALESCE(SUM(p.amount_paise - COALESCE(rt.refunded_paise,0)) FILTER (
+             WHERE (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $3::date AND $4::date
+               AND p.status IN ('CAPTURED','PARTIALLY_REFUNDED','REFUNDED')),0)::bigint AS previous_captured_revenue_paise
+         FROM shop_staff st JOIN shops sh ON sh.id=st.shop_id
+         LEFT JOIN appointments a ON a.staff_id=st.id
+           AND (a.starts_at AT TIME ZONE sh.timezone)::date BETWEEN $3::date AND $2::date
+         LEFT JOIN payments p ON p.appointment_id=a.id
+         LEFT JOIN refund_totals rt ON rt.payment_id=p.id
+         GROUP BY sh.id,sh.name,st.id,st.display_name
+       )
+       SELECT *,
+         CASE WHEN appointments-cancelled-no_shows > 0
+           THEN ROUND(completed::numeric/(appointments-cancelled-no_shows)*100,1) ELSE 0 END AS completion_rate,
+         CASE WHEN appointments-cancelled > 0
+           THEN ROUND(no_shows::numeric/(appointments-cancelled)*100,1) ELSE 0 END AS no_show_rate,
+         CASE WHEN completed > 0 THEN ROUND(captured_revenue_paise::numeric/completed) ELSE 0 END AS revenue_per_completed_paise,
+         CASE WHEN previous_appointments-previous_cancelled-previous_no_shows > 0
+           THEN ROUND(previous_completed::numeric/(previous_appointments-previous_cancelled-previous_no_shows)*100,1) ELSE 0 END AS previous_completion_rate
+       FROM staff_periods
+       ORDER BY shop_name,captured_revenue_paise DESC,display_name`,
+      [period.from, period.to, previousFrom, previousTo]
     );
-    res.json({ period, staff: result.rows });
+    const staff = result.rows.map(row => {
+      const pct = (current, previous) => Number(previous) === 0
+        ? (Number(current) === 0 ? 0 : null)
+        : Number(((Number(current) - Number(previous)) / Math.abs(Number(previous))) * 100).toFixed(1);
+      return {
+        ...row,
+        comparison: {
+          previousPeriod: { from: previousFrom, to: previousTo },
+          appointmentsChangePct: pct(row.appointments, row.previous_appointments),
+          completedChangePct: pct(row.completed, row.previous_completed),
+          revenueChangePct: pct(row.captured_revenue_paise, row.previous_captured_revenue_paise),
+          completionRateChangePoints: Number((Number(row.completion_rate) - Number(row.previous_completion_rate)).toFixed(1))
+        }
+      };
+    });
+    res.json({ period, comparisonPeriod: { from: previousFrom, to: previousTo }, staff });
   }));
 
   router.get('/admin/reports', ...admin, asyncRoute(async (req, res) => {
