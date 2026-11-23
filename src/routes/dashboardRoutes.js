@@ -267,23 +267,65 @@ function createDashboardRouter(pool, tokenService) {
     res.json({ workingHours: result.rows, timeOff: timeOff.rows });
   }));
 
+  // Barbers can manage their own future breaks/time off. Locking the staff row
+  // serializes this operation with appointment booking, which uses the same lock.
   router.post('/barber/time-off', ...barber, asyncRoute(async (req, res) => {
     const { staffId: rawStaffId, startsAt, endsAt, reason = null } = req.body || {};
     const staffId = id(rawStaffId);
     const start = Date.parse(startsAt);
     const end = Date.parse(endsAt);
-    if (!staffId || !Number.isFinite(start) || !Number.isFinite(end) || start >= end ||
-        (reason !== null && (typeof reason !== 'string' || reason.length > 240))) {
-      return res.status(400).json({ error: 'Provide your staffId, valid ISO startsAt/endsAt and optional reason up to 240 characters.' });
+    if (!staffId || !Number.isFinite(start) || !Number.isFinite(end) || start <= Date.now() || start >= end ||
+        (reason !== null && (typeof reason !== 'string' || reason.trim().length > 240))) {
+      return res.status(400).json({ error: 'Provide your staffId, a future ISO start/end range, and an optional reason up to 240 characters.' });
     }
+    const client = await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const staff = await client.query(
+        'SELECT id FROM shop_staff WHERE id=$1 AND user_id=$2 AND is_active=TRUE FOR UPDATE',
+        [staffId, req.user.id]
+      );
+      if (!staff.rowCount) {
+        await client.query('ROLLBACK');
+        return res.status(404).json({ error: 'Active staff membership not found.' });
+      }
+      const overlap = await client.query(
+        `SELECT id FROM appointments WHERE staff_id=$1 AND status IN ('BOOKED','CONFIRMED')
+         AND tstzrange(starts_at,ends_at,'[)') && tstzrange($2::timestamptz,$3::timestamptz,'[)')
+         LIMIT 1`,
+        [staffId, new Date(start).toISOString(), new Date(end).toISOString()]
+      );
+      if (overlap.rowCount) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: 'This break overlaps a booked or confirmed appointment. Choose another time.' });
+      }
+      const result = await client.query(
+        `INSERT INTO staff_time_off(staff_id,starts_at,ends_at,reason)
+         VALUES ($1,$2,$3,$4) RETURNING id,staff_id,starts_at,ends_at,reason`,
+        [staffId, new Date(start).toISOString(), new Date(end).toISOString(), reason?.trim() || null]
+      );
+      await client.query('COMMIT');
+      res.status(201).json({ timeOff: result.rows[0] });
+    } catch (error) {
+      await client.query('ROLLBACK');
+      throw error;
+    } finally {
+      client.release();
+    }
+  }));
+
+  router.delete('/barber/time-off/:timeOffId', ...barber, asyncRoute(async (req, res) => {
+    const timeOffId = id(req.params.timeOffId);
+    if (!timeOffId) return res.status(400).json({ error: 'Invalid break id.' });
     const result = await pool.query(
-      `INSERT INTO staff_time_off(staff_id,starts_at,ends_at,reason)
-       SELECT id,$3,$4,$5 FROM shop_staff WHERE id=$1 AND user_id=$2 AND is_active=TRUE
-       RETURNING id,staff_id,starts_at,ends_at,reason`,
-      [staffId,req.user.id,new Date(start).toISOString(),new Date(end).toISOString(),reason]
+      `DELETE FROM staff_time_off t USING shop_staff st
+       WHERE t.id=$1 AND st.id=t.staff_id AND st.user_id=$2 AND st.is_active=TRUE
+         AND t.starts_at > NOW()
+       RETURNING t.id`,
+      [timeOffId, req.user.id]
     );
-    if (!result.rowCount) return res.status(404).json({ error: 'Active staff membership not found.' });
-    res.status(201).json({ timeOff: result.rows[0] });
+    if (!result.rowCount) return res.status(404).json({ error: 'Upcoming break not found or not owned by your account.' });
+    res.json({ deleted: true, id: result.rows[0].id });
   }));
 
   return router;
