@@ -48,6 +48,19 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
             id: 'rfnd_test_001', payment_id: 'pay_test_capture_001', amount: input.amount, status: 'processed'
           }), { status: 200, headers: { 'content-type': 'application/json' } });
         }
+        if (target === 'https://api.openai.com/v1/chat/completions' && options.method === 'POST') {
+          const input = JSON.parse(options.body);
+          const userMessage = input.messages.find(message => message.role === 'user');
+          const context = JSON.parse(userMessage.content);
+          return new Response(JSON.stringify({
+            choices: [{ message: { content: JSON.stringify({
+              summary: 'Bookings and captured revenue are available for the selected shops.',
+              risks: ['Monitor cancellations and no-shows.'],
+              opportunities: ['Review the most-booked services.'],
+              actions: [{ priority: 'high', action: 'Review weekly schedule coverage', reason: 'Match staffing to booked demand.' }]
+            }) } }]
+          }), { status: 200, headers: { 'content-type': 'application/json' } });
+        }
         return new Response(JSON.stringify({ error: { description: 'Unexpected mocked provider request' } }), { status: 500 });
       };
     `);
@@ -63,6 +76,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
         RAZORPAY_KEY_SECRET: 'integration-razorpay-key-secret',
         RAZORPAY_WEBHOOK_SECRET: 'integration-razorpay-webhook-secret',
         OPERATOR_PROVISIONING_SECRET: 'integration-operator-secret-with-at-least-32-bytes',
+        OPENAI_API_KEY: 'integration-openai-api-key',
         NODE_OPTIONS: [process.env.NODE_OPTIONS, '--require', mockPath].filter(Boolean).join(' ')
       },
       stdio: ['ignore', 'pipe', 'pipe']
