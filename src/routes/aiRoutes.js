@@ -1,8 +1,8 @@
 const express = require('express');
 const { createAuthMiddleware } = require('../auth/middleware');
 
-const DATE_RE = /^\\d{4}-\\d{2}-\\d{2}$/;
-const ID_RE = /^[1-9]\\d*$/;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+const ID_RE = /^[1-9]\d*$/;
 
 function validDate(value) {
   return typeof value === 'string' && DATE_RE.test(value) &&
@@ -93,7 +93,7 @@ function createAiRouter(pool, tokenService, options = {}) {
       popularServices: services.rows
     };
 
-    const baseUrl = (env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\\/+$/, '');
+    const baseUrl = (env.OPENAI_BASE_URL || 'https://api.openai.com/v1').replace(/\/+$/, '');
     let providerResponse;
     try {
       providerResponse = await fetchImpl(baseUrl + '/chat/completions', {
