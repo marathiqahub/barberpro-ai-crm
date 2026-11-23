@@ -162,7 +162,7 @@ function createBookingRouter(pool, tokenService) {
   router.put('/staff/:staffId/hours/weekly', ...admin, asyncRoute(async (req, res) => {
     const staffId = parseId(req.params.staffId);
     const days = req.body?.weeklySchedule;
-    const timePattern = /^([01]\\d|2[0-3]):[0-5]\\d$/;
+    const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
     if (!staffId || !Array.isArray(days) || days.length !== 7) return res.status(400).json({ error: 'Provide weeklySchedule with exactly seven day entries (0=Sunday…6=Saturday).' });
     const seen = new Set();
     for (const day of days) {
