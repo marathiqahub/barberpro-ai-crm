@@ -141,7 +141,7 @@ function createDashboardRouter(pool, tokenService) {
   router.put('/barber/hours/:staffId/weekly', ...barber, asyncRoute(async (req, res) => {
     const staffId = id(req.params.staffId);
     const days = req.body?.weeklySchedule;
-    const timePattern = /^([01]\\d|2[0-3]):[0-5]\\d$/;
+    const timePattern = /^([01]\d|2[0-3]):[0-5]\d$/;
     if (!staffId || !Array.isArray(days) || days.length !== 7) {
       return res.status(400).json({ error: 'Provide all seven days of the week.' });
     }
