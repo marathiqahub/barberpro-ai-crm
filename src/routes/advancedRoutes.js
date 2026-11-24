@@ -6,6 +6,7 @@ const ExcelJS=require('exceljs');
 const {createAuthMiddleware}=require('../auth/middleware');
 const {generateSecret,encryptSecret,decryptSecret,verifyTotp,otpauthUri}=require('../advanced/totp');
 const {toCsv,parseCsv}=require('../advanced/csv');
+const {scheduleAppointmentReminders}=require('../messaging/reminders');
 
 function createAdvancedRouter(pool,tokenService){
  const r=express.Router(),{authenticate,requireRole}=createAuthMiddleware(pool,tokenService);
@@ -55,6 +56,8 @@ function createAdvancedRouter(pool,tokenService){
       AND tstzrange(x.starts_at,x.buffer_ends_at,'[)') && tstzrange($2,$3,'[)') LIMIT 1`,[a.staff_id,start.toISOString(),bufferEnd.toISOString(),appointmentId]);
    if(blocked.rowCount){await c.query('ROLLBACK');return s.status(409).json({error:'That time is no longer available for the same barber.'});}
    const updated=await c.query('UPDATE appointments SET starts_at=$2,ends_at=$3,updated_at=NOW() WHERE id=$1 RETURNING id,starts_at,ends_at,status',[appointmentId,start.toISOString(),newEnd.toISOString()]);
+   await c.query("UPDATE shop_customer_reminders SET status='CANCELLED',processing_at=NULL WHERE appointment_id=$1 AND template_key IN('APPOINTMENT_REMINDER_24H','APPOINTMENT_REMINDER_2H') AND status IN('PENDING','PROCESSING')",[appointmentId]);
+   await scheduleAppointmentReminders(c,{id:appointmentId,shop_id:a.shop_id,customer_id:a.customer_id,starts_at:start.toISOString()},{transactional:true});
    await c.query('INSERT INTO shop_appointment_reschedules(appointment_id,shop_id,customer_id,old_starts_at,new_starts_at,free_of_charge) VALUES($1,$2,$3,$4,$5,TRUE)',[appointmentId,a.shop_id,q.user.id,a.starts_at,start.toISOString()]);
    await c.query(`INSERT INTO shop_audit_events(shop_id,actor_user_id,action,entity_type,entity_id,metadata)
     VALUES($1,$2,'APPOINTMENT_RESCHEDULED','APPOINTMENT',$3,$4::jsonb)`,[a.shop_id,q.user.id,String(appointmentId),JSON.stringify({from:a.starts_at,to:start.toISOString(),staffId:a.staff_id})]);
@@ -66,7 +69,9 @@ function createAdvancedRouter(pool,tokenService){
  r.post('/appointments/:appointmentId/reference-photo',...customer,wrap(async(q,s)=>{
   const appointmentId=id(q.params.appointmentId),type=q.body?.contentType,data=q.body?.imageBase64;
   if(!appointmentId||q.body?.consent!==true||!['image/jpeg','image/png','image/webp'].includes(type)||typeof data!=='string')return s.status(400).json({error:'Appointment, supported image type, imageBase64 and explicit consent are required.'});
-  const bytes=Buffer.from(data.replace(/^data:image\/(?:jpeg|png|webp);base64,/i,''),'base64');
+  const encoded=data.replace(/^data:image\\/(?:jpeg|png|webp);base64,/i,'');
+  if(!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded))return s.status(400).json({error:'Reference photo is not valid base64 data.'});
+  const bytes=Buffer.from(encoded,'base64');
   if(!bytes.length||bytes.length>524288)return s.status(413).json({error:'Reference photos must be 512 KB or smaller.'});
   const a=await pool.query(`SELECT id,shop_id,customer_id,status FROM appointments WHERE id=$1 AND customer_id=$2 AND status IN('BOOKED','CONFIRMED')`,[appointmentId,q.user.id]);
   if(!a.rowCount)return s.status(404).json({error:'Upcoming appointment not found.'});
