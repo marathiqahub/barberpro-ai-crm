@@ -87,7 +87,7 @@ function createAdvancedRouter(pool,tokenService){
     VALUES($1,$2,$3,$4,$5,'booking-reference-v1') RETURNING id,retention_until,uploaded_at`,[appointmentId,a.rows[0].shop_id,q.user.id,type,bytes]);
   s.status(201).json({photo:saved.rows[0],retentionDays:90});
  }));
- r.get('/appointments/:appointmentId/reference-photo',...authenticate,wrap(async(q,s)=>{
+ r.get('/appointments/:appointmentId/reference-photo',authenticate,wrap(async(q,s)=>{
   const appointmentId=id(q.params.appointmentId);if(!appointmentId)return s.sendStatus(400);
   const found=await pool.query(`SELECT p.content_type,p.image_bytes,p.retention_until,a.customer_id,a.staff_id,st.user_id AS barber_user_id
    FROM shop_appointment_reference_photos p JOIN appointments a ON a.id=p.appointment_id JOIN shop_staff st ON st.id=a.staff_id
@@ -262,8 +262,8 @@ function createAdvancedRouter(pool,tokenService){
  }));
 
  // TOTP authenticator enrollment for admins and barbers. Login requires a code once enabled.
- r.get('/auth/totp/status',...authenticate,wrap(async(q,s)=>{if(!['ADMIN','BARBER'].includes(q.user.role))return s.sendStatus(403);const out=await pool.query('SELECT enabled FROM user_totp WHERE user_id=$1',[q.user.id]);s.json({enabled:Boolean(out.rows[0]?.enabled),requiredForPrivilegedLogin:process.env.TOTP_REQUIRED_FOR_PRIVILEGED==='true'});}));
- r.post('/auth/totp/enroll',...authenticate,wrap(async(q,s)=>{
+ r.get('/auth/totp/status',authenticate,wrap(async(q,s)=>{if(!['ADMIN','BARBER'].includes(q.user.role))return s.sendStatus(403);const out=await pool.query('SELECT enabled FROM user_totp WHERE user_id=$1',[q.user.id]);s.json({enabled:Boolean(out.rows[0]?.enabled),requiredForPrivilegedLogin:process.env.TOTP_REQUIRED_FOR_PRIVILEGED==='true'});}));
+ r.post('/auth/totp/enroll',authenticate,wrap(async(q,s)=>{
   if(!['ADMIN','BARBER'].includes(q.user.role))return s.sendStatus(403);
   const existing=await pool.query('SELECT enabled FROM user_totp WHERE user_id=$1',[q.user.id]);
   if(existing.rows[0]?.enabled)return s.status(409).json({error:'Authenticator is already enabled. Disable it with a current code before rotating the secret.'});
@@ -297,7 +297,7 @@ function createAdvancedRouter(pool,tokenService){
    s.json({enabled:true,user,tokens:{accessToken:pair.accessToken,refreshToken:pair.refreshToken,tokenType:'Bearer',expiresIn:900,refreshExpiresAt:pair.refreshExpiresAt.toISOString()}});
   }catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}
  }));
- r.post('/auth/totp/disable',...authenticate,wrap(async(q,s)=>{
+ r.post('/auth/totp/disable',authenticate,wrap(async(q,s)=>{
   if(!['ADMIN','BARBER'].includes(q.user.role))return s.sendStatus(403);
   const out=await pool.query('SELECT secret_encrypted,enabled,last_verified_step FROM user_totp WHERE user_id=$1',[q.user.id]);
   if(!out.rows[0]?.enabled)return s.status(400).json({error:'Authenticator is not enabled.'});
@@ -308,7 +308,7 @@ function createAdvancedRouter(pool,tokenService){
  }));
 
  // Plan catalog and Razorpay Subscriptions for BarberPro shop billing.
- r.get('/subscription-plans',...authenticate,wrap(async(q,s)=>{const out=await pool.query('SELECT id,code,name,billing_period,amount_paise,feature_entitlements FROM barberpro_subscription_plans WHERE is_active=TRUE ORDER BY amount_paise');s.json({plans:out.rows});}));
+ r.get('/subscription-plans',authenticate,wrap(async(q,s)=>{const out=await pool.query('SELECT id,code,name,billing_period,amount_paise,feature_entitlements FROM barberpro_subscription_plans WHERE is_active=TRUE ORDER BY amount_paise');s.json({plans:out.rows});}));
  r.post('/admin/subscription-plans',...admin,wrap(async(q,s)=>{
   const b=q.body||{},code=String(b.code||'').toLowerCase(),name=String(b.name||'').trim(),period=b.billingPeriod,amount=Number(b.amountPaise),features=b.featureEntitlements||{};
   if(!features||typeof features!=='object'||Array.isArray(features))return s.status(400).json({error:'featureEntitlements must be a JSON object of boolean feature flags.'});
@@ -335,7 +335,7 @@ function createAdvancedRouter(pool,tokenService){
   const out=await pool.query(`SELECT ss.id,ss.status,ss.current_start,ss.current_end,ss.next_charge_at,ss.short_url,p.code plan_code,p.name plan_name,p.billing_period,p.feature_entitlements
    FROM shop_subscriptions ss JOIN barberpro_subscription_plans p ON p.id=ss.plan_id WHERE ss.shop_id=$1 ORDER BY ss.created_at DESC LIMIT 1`,[shopId]);s.json({subscription:out.rows[0]||null});
  }));
- r.get('/shops/:shopId/feature-entitlements',...authenticate,wrap(async(q,s)=>{
+ r.get('/shops/:shopId/feature-entitlements',authenticate,wrap(async(q,s)=>{
   const shopId=id(q.params.shopId);if(!shopId||!await shopAccess(q.user,shopId))return s.sendStatus(404);
   const out=await pool.query(`SELECT p.feature_entitlements,ss.status FROM shop_subscriptions ss JOIN barberpro_subscription_plans p ON p.id=ss.plan_id
    WHERE ss.shop_id=$1 AND ss.status IN('ACTIVE','AUTHENTICATED') ORDER BY ss.created_at DESC LIMIT 1`,[shopId]);
