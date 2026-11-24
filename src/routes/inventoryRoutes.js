@@ -1,4 +1,5 @@
 const express=require('express');
+const crypto=require('node:crypto');
 const {createAuthMiddleware}=require('../auth/middleware');
 function createInventoryRouter(pool,tokenService){
  const router=express.Router(),{authenticate,requireRole}=createAuthMiddleware(pool,tokenService),admin=[authenticate,requireRole('ADMIN')];
@@ -76,9 +77,9 @@ function createInventoryRouter(pool,tokenService){
    const found=await client.query('SELECT id FROM shop_inventory_items WHERE shop_id=$1 AND id=ANY($2::bigint[]) AND is_active=TRUE',[shopId,ids]);
    if(found.rowCount!==new Set(ids).size){await client.query('ROLLBACK');return res.status(400).json({error:'Every purchase item must be unique and belong to this shop.'});}
    const count=await client.query('SELECT COUNT(*)::int n FROM shop_purchase_orders WHERE shop_id=$1',[shopId]);
-   const number='PO-'+String(Number(count.rows[0].n)+1).padStart(6,'0');
-   const po=await client.query(`INSERT INTO shop_purchase_orders(shop_id,supplier_id,order_number,notes,created_by)
-    VALUES($1,$2,$3,$4,$5) RETURNING *`,[shopId,supplierId,number,b.notes||null,req.user.id]);
+   const number='PO-'+Date.now().toString(36).toUpperCase()+'-'+crypto.randomBytes(3).toString('hex').toUpperCase();
+   const po=await client.query(`INSERT INTO shop_purchase_orders(shop_id,supplier_id,order_number,status,notes,created_by)
+    VALUES($1,$2,$3,'ORDERED',$4,$5) RETURNING *`,[shopId,supplierId,number,b.notes||null,req.user.id]);
    for(const line of b.items)await client.query(`INSERT INTO shop_purchase_order_lines(purchase_order_id,item_id,ordered_quantity,unit_cost_paise)
     VALUES($1,$2,$3,$4)`,[po.rows[0].id,line.itemId,line.quantity,line.unitCostPaise]);
    await client.query('COMMIT');res.status(201).json({purchaseOrder:po.rows[0]});
