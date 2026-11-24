@@ -46,7 +46,7 @@ CREATE TABLE IF NOT EXISTS appointment_extra_payments (
   provider_order_id VARCHAR(100) UNIQUE,
   provider_payment_id VARCHAR(100) UNIQUE,
   status VARCHAR(16) NOT NULL DEFAULT 'CREATED'
-    CHECK (status IN ('CREATED','PAID','FAILED','REFUNDED','WAIVED')),
+    CHECK (status IN ('CREATED','AUTHORIZED','PAID','FAILED','REFUNDED','WAIVED')),
   provider_payload JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
