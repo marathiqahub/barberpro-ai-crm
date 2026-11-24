@@ -10,6 +10,7 @@ async function run(){
   await client.query('BEGIN');
   await client.query("UPDATE shop_customer_reminders SET status='PENDING',processing_at=NULL WHERE status='PROCESSING' AND processing_at<NOW()-INTERVAL '10 minutes'");
   await client.query("UPDATE shop_waitlist_offers SET status='EXPIRED' WHERE status='OFFERED' AND expires_at<=NOW()");
+  await client.query("UPDATE shop_ai_booking_proposals SET status='EXPIRED' WHERE status='PROPOSED' AND expires_at<=NOW()");
   await client.query("UPDATE shop_waitlist_entries SET status='WAITING',updated_at=NOW() WHERE status='OFFERED' AND id IN (SELECT waitlist_entry_id FROM shop_waitlist_offers WHERE status='EXPIRED')");
   await client.query(`WITH visits AS (
     SELECT shop_id,customer_id,starts_at,LAG(starts_at) OVER(PARTITION BY shop_id,customer_id ORDER BY starts_at) previous_visit
