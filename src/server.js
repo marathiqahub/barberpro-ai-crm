@@ -132,9 +132,32 @@ app.post(
 );
 
 const publicDir = require('node:path').join(__dirname, '..', 'public');
-app.get(['/app', '/app/*'], (req, res) => res.sendFile(require('node:path').join(publicDir, 'workspace.html')));
+const appHostname = (process.env.APP_HOSTNAME || '').trim().toLowerCase();
+const marketingHostname = (process.env.MARKETING_HOSTNAME || '').trim().toLowerCase();
+const appBaseUrl = (process.env.APP_BASE_URL || '').trim().replace(/\/$/, '');
+const marketingBaseUrl = (process.env.MARKETING_BASE_URL || '').trim().replace(/\/$/, '');
+const isAppHost = req => Boolean(appHostname && req.hostname.toLowerCase() === appHostname);
+const isMarketingHost = req => Boolean(marketingHostname && req.hostname.toLowerCase() === marketingHostname);
+const workspacePage = (req, res) => res.sendFile(require('node:path').join(publicDir, 'workspace.html'));
+
+// Keep the legacy /app path working, while sending marketing-site visitors to the
+// dedicated application hostname once the owner has configured the custom domain.
+app.get(['/app', '/app/*'], (req, res) => {
+  if (isMarketingHost(req) && appBaseUrl) return res.redirect(302, appBaseUrl + req.originalUrl);
+  return workspacePage(req, res);
+});
+app.get('/demo', (req, res) => {
+  if (isAppHost(req) && marketingBaseUrl) return res.redirect(302, marketingBaseUrl + '/demo');
+  return res.sendFile(require('node:path').join(publicDir, 'demo.html'));
+});
+// On app.barberpro.in, the root is the authenticated CRM entry point. On the
+// marketing hostname (and on the current legacy host) the root remains public.
+app.get(['/', '/index.html'], (req, res, next) => isAppHost(req) ? workspacePage(req, res) : next());
 app.use(express.static(publicDir, { index: 'index.html' }));
-app.get('*', (req, res, next) => { if (req.path.startsWith('/api/')) return next(); return res.sendFile(require('node:path').join(__dirname, '..', 'public', 'index.html')); });
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api/')) return next();
+  return isAppHost(req) ? workspacePage(req, res) : res.sendFile(require('node:path').join(publicDir, 'index.html'));
+});
 app.use((error, req, res, next) => {
   if (error.type === 'entity.parse.failed') {
     return res.status(400).json({ error: 'Request body must be valid JSON.' });
