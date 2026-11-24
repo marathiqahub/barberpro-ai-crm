@@ -110,7 +110,7 @@ function createCustomerExperienceRouter(pool, tokenService, options = {}) {
 
   router.post('/customer/shops/:shopId/waitlist',...customer,wrap(async(req,res)=>{
     const shopId=id(req.params.shopId),serviceId=id(req.body?.serviceId),staffId=req.body?.preferredStaffId==null?null:id(req.body.preferredStaffId),date=req.body?.preferredDate;
-    if(!shopId||!serviceId||!/^\d{4}-\d{2}-\d{2}$/.test(date||''))return res.status(400).json({error:'Provide a shop, service and preferred date.'});
+    if(!shopId||!serviceId||(req.body?.preferredStaffId!=null&&!staffId)||!/^\d{4}-\d{2}-\d{2}$/.test(date||'')||(req.body?.preferredFrom&&!/^([01]\d|2[0-3]):[0-5]\d$/.test(req.body.preferredFrom))||(req.body?.preferredTo&&!/^([01]\d|2[0-3]):[0-5]\d$/.test(req.body.preferredTo))||(req.body?.preferredFrom&&req.body?.preferredTo&&req.body.preferredTo<=req.body.preferredFrom))return res.status(400).json({error:'Provide a valid shop, service, preferred date and optional time window.'});
     const out=await pool.query(`INSERT INTO shop_waitlist_entries(shop_id,customer_id,service_id,preferred_staff_id,preferred_date,preferred_from,preferred_to)
       SELECT sh.id,$2,sv.id,$4,$5,$6,$7 FROM shops sh JOIN services sv ON sv.shop_id=sh.id
       WHERE sh.id=$1 AND sh.is_active=TRUE AND sv.id=$3 AND sv.is_active=TRUE
