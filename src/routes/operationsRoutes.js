@@ -109,8 +109,18 @@ function createOperationsRouter(pool, tokenService) {
       let subtotal=0,discount=0,taxable=0,cgst=0,sgst=0,igst=0;
       const lines=[];
       for(const item of b.items){
-        const qty=Number(item.quantity),price=Number(item.unitPricePaise),disc=Number(item.discountPaise||0),rate=profile.gst_registered?Number(item.taxRateBps||0):0;
-        if(typeof item.description!=='string'||!item.description.trim()||!Number.isFinite(qty)||qty<=0||qty>10000||
+        const qty=Number(item.quantity),disc=Number(item.discountPaise||0),rate=profile.gst_registered?Number(item.taxRateBps||0):0;
+        const inventoryItemId=item.inventoryItemId===undefined||item.inventoryItemId===null||item.inventoryItemId===''?null:id(item.inventoryItemId);
+        if(item.inventoryItemId!==undefined&&item.inventoryItemId!==null&&item.inventoryItemId!==''&&!inventoryItemId){await client.query('ROLLBACK');return res.status(400).json({error:'Invalid retail inventory item.'});}
+        let price=Number(item.unitPricePaise),description=typeof item.description==='string'?item.description.trim():'';
+        if(inventoryItemId){
+          const product=await client.query('SELECT id,name,retail_price_paise,quantity FROM shop_inventory_items WHERE id=$1 AND shop_id=$2 AND is_active=TRUE FOR UPDATE',[inventoryItemId,shopId]);
+          if(!product.rowCount){await client.query('ROLLBACK');return res.status(400).json({error:'Retail product is not active in this shop.'});}
+          if(Number(product.rows[0].retail_price_paise)<1){await client.query('ROLLBACK');return res.status(400).json({error:'Set a retail selling price for this product before checkout.'});}
+          if(Number(product.rows[0].quantity)<qty){await client.query('ROLLBACK');return res.status(409).json({error:'Insufficient retail stock for '+product.rows[0].name+'.'});}
+          price=Number(product.rows[0].retail_price_paise);description=product.rows[0].name;
+        }
+        if(!description||!Number.isFinite(qty)||qty<=0||qty>10000||
            !Number.isSafeInteger(price)||price<0||!Number.isSafeInteger(disc)||disc<0||!Number.isInteger(rate)||rate<0||rate>10000||
            (item.hsnSacCode && !/^[A-Za-z0-9]{4,8}$/.test(item.hsnSacCode))) {
           await client.query('ROLLBACK');return res.status(400).json({error:'Each item needs a description, valid quantity, unit price, discount, tax rate and optional HSN/SAC code.'});
@@ -131,7 +141,7 @@ function createOperationsRouter(pool, tokenService) {
         if(item.serviceId!==undefined&&item.serviceId!==null&&item.serviceId!==''&&!serviceId){await client.query('ROLLBACK');return res.status(400).json({error:'Invalid service catalogue reference.'});}
         if(serviceId){const svc=await client.query('SELECT id FROM services WHERE id=$1 AND shop_id=$2 AND is_active=TRUE',[serviceId,shopId]);if(!svc.rowCount){await client.query('ROLLBACK');return res.status(400).json({error:'Invoice service must be active in this shop.'});}}
         const tip=Number(item.tipPaise||0);if(!Number.isSafeInteger(tip)||tip<0||tip>10000000){await client.query('ROLLBACK');return res.status(400).json({error:'Tip must be a non-negative whole amount in paise.'});}
-        const line={description:item.description.trim(),hsn:item.hsnSacCode||null,quantity:qty,price,discount:disc,rate,base,cgst:intra?Math.floor(tax/2):0,sgst:intra?tax-Math.floor(tax/2):0,igst:profile.gst_registered&&!intra?tax:0,total:base+tax,staffId,commissionRate,commission:commissionForTaxableAmount(base,commissionRate),serviceId,tip};
+        const line={description,hsn:item.hsnSacCode||null,quantity:qty,price,discount:disc,rate,base,cgst:intra?Math.floor(tax/2):0,sgst:intra?tax-Math.floor(tax/2):0,igst:profile.gst_registered&&!intra?tax:0,total:base+tax,staffId,commissionRate,commission:commissionForTaxableAmount(base,commissionRate),serviceId,inventoryItemId,tip};
         subtotal+=gross;discount+=disc;taxable+=base;cgst+=line.cgst;sgst+=line.sgst;igst+=line.igst;lines.push(line);
       }
       const total=taxable+cgst+sgst+igst, paid=b.amountPaidPaise||0;
@@ -146,10 +156,10 @@ function createOperationsRouter(pool, tokenService) {
         [shopId,invoiceNumber,fy,docType,date,profile.gstin,profile.legal_name,profile.trade_name,profile.address,profile.state_code,b.customerName.trim(),b.customerEmail||null,b.customerPhone||null,b.customerGstin||null,place,subtotal,discount,taxable,cgst,sgst,igst,total,paid,mode,req.user.id]);
       const invoice=inserted.rows[0];
       for(const line of lines) await client.query(
-        `INSERT INTO sales_invoice_lines (invoice_id,description,hsn_sac_code,quantity,unit_price_paise,discount_paise,tax_rate_bps,taxable_paise,cgst_paise,sgst_paise,igst_paise,total_paise,staff_id,commission_rate_bps,commission_paise,service_id,tip_paise)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
-        [invoice.id,line.description,line.hsn,line.quantity,line.price,line.discount,line.rate,line.base,line.cgst,line.sgst,line.igst,line.total,line.staffId,line.commissionRate,line.commission,line.serviceId,line.tip]);
-      for(const line of lines){if(!line.serviceId)continue;const recipe=await client.query('SELECT item_id,quantity_per_service FROM shop_service_inventory_recipes WHERE shop_id=$1 AND service_id=$2 AND is_active=TRUE ORDER BY item_id',[shopId,line.serviceId]);for(const part of recipe.rows){const consume=Number((Number(part.quantity_per_service)*line.quantity).toFixed(3));const stock=await client.query('UPDATE shop_inventory_items SET quantity=quantity-$3,updated_at=NOW() WHERE id=$1 AND shop_id=$2 AND is_active=TRUE AND quantity >= $3 RETURNING quantity',[part.item_id,shopId,consume]);if(!stock.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'Insufficient stock to complete this invoice service.'});}await client.query(`INSERT INTO shop_stock_movements(shop_id,item_id,movement_type,quantity_delta,unit_cost_paise,reference,note,created_by) SELECT $1,$2,'CONSUMPTION',$3,unit_cost_paise,$4,$5,$6 FROM shop_inventory_items WHERE id=$2 AND shop_id=$1`,[shopId,part.item_id,-consume,'invoice:'+invoice.id,'Automatic service consumption',req.user.id]);}}
+        `INSERT INTO sales_invoice_lines (invoice_id,description,hsn_sac_code,quantity,unit_price_paise,discount_paise,tax_rate_bps,taxable_paise,cgst_paise,sgst_paise,igst_paise,total_paise,staff_id,commission_rate_bps,commission_paise,service_id,tip_paise,inventory_item_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+        [invoice.id,line.description,line.hsn,line.quantity,line.price,line.discount,line.rate,line.base,line.cgst,line.sgst,line.igst,line.total,line.staffId,line.commissionRate,line.commission,line.serviceId,line.tip,line.inventoryItemId]);
+      for(const line of lines){if(line.inventoryItemId){const stock=await client.query('UPDATE shop_inventory_items SET quantity=quantity-$3,updated_at=NOW() WHERE id=$1 AND shop_id=$2 AND is_active=TRUE AND quantity >= $3 RETURNING quantity',[line.inventoryItemId,shopId,line.quantity]);if(!stock.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'Insufficient retail stock to complete this invoice.'});}await client.query(`INSERT INTO shop_stock_movements(shop_id,item_id,movement_type,quantity_delta,unit_cost_paise,reference,note,created_by) SELECT $1,$2,'SALE',$3,unit_cost_paise,$4,$5,$6 FROM shop_inventory_items WHERE id=$2 AND shop_id=$1`,[shopId,line.inventoryItemId,-line.quantity,'invoice:'+invoice.id,'Retail product sold at POS',req.user.id]);}if(!line.serviceId)continue;const recipe=await client.query('SELECT item_id,quantity_per_service FROM shop_service_inventory_recipes WHERE shop_id=$1 AND service_id=$2 AND is_active=TRUE ORDER BY item_id',[shopId,line.serviceId]);for(const part of recipe.rows){const consume=Number((Number(part.quantity_per_service)*line.quantity).toFixed(3));const stock=await client.query('UPDATE shop_inventory_items SET quantity=quantity-$3,updated_at=NOW() WHERE id=$1 AND shop_id=$2 AND is_active=TRUE AND quantity >= $3 RETURNING quantity',[part.item_id,shopId,consume]);if(!stock.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'Insufficient stock to complete this invoice service.'});}await client.query(`INSERT INTO shop_stock_movements(shop_id,item_id,movement_type,quantity_delta,unit_cost_paise,reference,note,created_by) SELECT $1,$2,'CONSUMPTION',$3,unit_cost_paise,$4,$5,$6 FROM shop_inventory_items WHERE id=$2 AND shop_id=$1`,[shopId,part.item_id,-consume,'invoice:'+invoice.id,'Automatic service consumption',req.user.id]);}}
       const allocations=Array.isArray(b.paymentBreakdown)?b.paymentBreakdown:[];
       if(allocations.length){
         const methods=['CASH','UPI','CARD','RAZORPAY'];
