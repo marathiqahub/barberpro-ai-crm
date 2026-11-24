@@ -141,11 +141,22 @@ function createRetentionRouter(pool, tokens) {
 
   r.get('/customer/shops/:shopId/preferences',...customer,wrap(async(q,s)=>{
     const shop=id(q.params.shopId);if(!shop)return s.status(400).json({error:'Invalid shop id.'});
-    const x=await pool.query(`SELECT p.*,
-      COALESCE((SELECT e.consent FROM shop_customer_consent_events e WHERE e.shop_id=p.shop_id AND e.customer_id=p.customer_id
-        AND e.purpose='PROFILE_NOTES' ORDER BY e.recorded_at DESC LIMIT 1),FALSE) profile_notes_consent
-      FROM shop_customer_profiles p WHERE p.shop_id=$1 AND p.customer_id=$2`,[shop,q.user.id]);
-    s.json({profile:x.rows[0]||null});
+    const [profile,messaging,events,contact,rebooking]=await Promise.all([
+      pool.query(`SELECT p.*,st.display_name preferred_staff_name,sv.name preferred_service_name,
+        COALESCE((SELECT e.consent FROM shop_customer_consent_events e WHERE e.shop_id=$1 AND e.customer_id=$2 AND e.purpose='PROFILE_NOTES' ORDER BY e.recorded_at DESC,e.id DESC LIMIT 1),FALSE) profile_notes_consent
+        FROM shop_customer_profiles p LEFT JOIN shop_staff st ON st.id=p.preferred_staff_id AND st.shop_id=p.shop_id
+        LEFT JOIN services sv ON sv.id=p.preferred_service_id AND sv.shop_id=p.shop_id WHERE p.shop_id=$1 AND p.customer_id=$2`,[shop,q.user.id]),
+      pool.query('SELECT channel,destination,consent,revoked_at FROM shop_message_consents WHERE shop_id=$1 AND customer_id=$2',[shop,q.user.id]),
+      pool.query(`SELECT DISTINCT ON(purpose) purpose,consent FROM shop_customer_consent_events WHERE shop_id=$1 AND customer_id=$2 AND purpose IN('MARKETING','PHOTO_STORAGE') ORDER BY purpose,recorded_at DESC,id DESC`,[shop,q.user.id]),
+      pool.query('SELECT email,phone FROM users WHERE id=$1',[q.user.id]),
+      pool.query('SELECT interval_days,enabled FROM shop_customer_rebooking_profiles WHERE shop_id=$1 AND customer_id=$2',[shop,q.user.id])
+    ]);
+    const p=profile.rows[0]||null,byPurpose=Object.fromEntries(events.rows.map(x=>[x.purpose,x.consent]));
+    const byChannel=Object.fromEntries(messaging.rows.map(x=>[x.channel,{consent:x.consent&&!x.revoked_at,destination:x.destination}]));
+    s.set('Cache-Control','no-store').json({profile:p,contact:contact.rows[0]||{},rebooking:rebooking.rows[0]||{interval_days:21,enabled:false},consents:{
+      profileNotes:!!p?.profile_notes_consent,photoStorage:byPurpose.PHOTO_STORAGE??!!p?.photo_consent,
+      marketing:byPurpose.MARKETING??false,whatsapp:!!byChannel.WHATSAPP?.consent,sms:!!byChannel.SMS?.consent
+    }});
   }));
   r.put('/customer/shops/:shopId/preferences',...customer,wrap(async(q,s)=>{
     const shop=id(q.params.shopId),b=q.body||{},staff=b.preferredStaffId==null?null:id(b.preferredStaffId),service=b.preferredServiceId==null?null:id(b.preferredServiceId);
@@ -210,6 +221,21 @@ function createRetentionRouter(pool, tokens) {
       FROM shop_customer_consent_events e JOIN users u ON u.id=e.customer_id
       WHERE e.shop_id=$1 ORDER BY e.recorded_at DESC LIMIT 1000`,[shop]);s.json({events:x.rows});
   }));
+  r.get('/customer/shops/:shopId/rebooking-preference',...customer,wrap(async(q,s)=>{
+    const shop=id(q.params.shopId);if(!shop)return s.status(400).json({error:'Invalid shop id.'});
+    const x=await pool.query('SELECT interval_days,enabled FROM shop_customer_rebooking_profiles WHERE shop_id=$1 AND customer_id=$2',[shop,q.user.id]);
+    s.json({preference:x.rows[0]||{interval_days:21,enabled:false}});
+  }));
+  r.put('/customer/shops/:shopId/rebooking-preference',...customer,wrap(async(q,s)=>{
+    const shop=id(q.params.shopId),days=q.body?.intervalDays,enabled=q.body?.enabled;
+    if(!shop||!Number.isInteger(days)||days<7||days>365||typeof enabled!=='boolean')return s.status(400).json({error:'Provide an interval from 7 to 365 days and an explicit reminder choice.'});
+    const x=await pool.query(`INSERT INTO shop_customer_rebooking_profiles(shop_id,customer_id,interval_days,enabled,interval_source)
+      SELECT id,$2,$3,$4,'MANUAL' FROM shops WHERE id=$1 AND is_active=TRUE
+      ON CONFLICT(shop_id,customer_id) DO UPDATE SET interval_days=EXCLUDED.interval_days,interval_source='MANUAL',enabled=EXCLUDED.enabled,updated_at=NOW()
+      RETURNING interval_days,enabled`,[shop,q.user.id,days,enabled]);
+    if(!x.rowCount)return s.status(404).json({error:'Active shop not found.'});s.json({preference:x.rows[0]});
+  }));
+
   r.post('/customer/data-rights-requests',...customer,wrap(async(q,s)=>{
     const type=q.body?.type,reason=typeof q.body?.reason==='string'?q.body.reason.trim():null;
     if(!['EXPORT','DELETE'].includes(type)||(reason&&reason.length>1000))return s.status(400).json({error:'Request type must be EXPORT or DELETE; optional reason is limited to 1000 characters.'});
@@ -264,6 +290,19 @@ function createRetentionRouter(pool, tokens) {
     if(!x.rowCount)return s.status(404).json({error:'Completed appointment not found or feedback already submitted.'});
     const settings=await pool.query('SELECT google_review_url FROM shop_booking_policies WHERE shop_id=$1',[x.rows[0].shop_id]);
     s.status(201).json({feedback:x.rows[0],route:rating>=4?'GOOGLE_REVIEW':'PRIVATE_FEEDBACK',googleReviewUrl:rating>=4?(settings.rows[0]?.google_review_url||null):null});
+  }));
+
+  r.get('/admin/shops/:shopId/demo-customer-profiles',...admin,wrap(async(q,s)=>{
+    const shop=id(q.params.shopId);if(!shop)return s.status(400).json({error:'Invalid shop id.'});
+    const seeds=[
+      ['DEMO-001','Demo Customer Asha (SAMPLE)','Sample barber preference','Classic haircut','Synthetic sample notes: prefers a neat, low-maintenance style.'],
+      ['DEMO-002','Demo Customer Rohan (SAMPLE)','No preference','Beard trim','Synthetic sample notes: asks for a tidy beard outline.'],
+      ['DEMO-003','Demo Customer Meera (SAMPLE)','No preference','Hair wash','Synthetic sample notes: no additional service notes.']
+    ];
+    for(const row of seeds)await pool.query(`INSERT INTO shop_demo_customer_profiles(shop_id,demo_key,display_name,preferred_barber_label,preferred_service_label,care_notes)
+      SELECT id,$2,$3,$4,$5,$6 FROM shops WHERE id=$1 AND is_active=TRUE ON CONFLICT(shop_id,demo_key) DO NOTHING`,[shop,...row]);
+    const out=await pool.query('SELECT demo_key,display_name,preferred_barber_label,preferred_service_label,care_notes,photo_storage_consent,marketing_consent,whatsapp_reminders_consent,sms_reminders_consent FROM shop_demo_customer_profiles WHERE shop_id=$1 ORDER BY demo_key',[shop]);
+    s.json({profiles:out.rows,notice:'Synthetic demo records only; these are not user accounts and do not represent customer consent.'});
   }));
 
   return r;
