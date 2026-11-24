@@ -46,7 +46,7 @@ function createBookingRouter(pool, tokenService) {
 
     const result = await pool.query(
       `WITH context AS (
-         SELECT s.id AS shop_id, s.timezone, sv.id AS service_id, sv.duration_minutes
+         SELECT s.id AS shop_id, s.timezone, sv.id AS service_id, sv.duration_minutes, sv.cleanup_minutes
          FROM shops s JOIN services sv ON sv.shop_id = s.id
          WHERE s.id = $1 AND s.is_active = TRUE AND sv.id = $2 AND sv.is_active = TRUE
        ),
@@ -54,17 +54,20 @@ function createBookingRouter(pool, tokenService) {
          SELECT st.id AS staff_id, st.display_name,
                 slot AS starts_at,
                 slot + make_interval(mins => c.duration_minutes) AS ends_at,
+                slot + make_interval(mins => c.duration_minutes + c.cleanup_minutes) AS buffer_ends_at,
                 c.timezone
          FROM context c
          JOIN shop_staff st ON st.shop_id = c.shop_id AND st.is_active = TRUE
          JOIN staff_working_hours wh ON wh.staff_id = st.id
-           AND wh.day_of_week = EXTRACT(DOW FROM $3::date)::int AND wh.is_active = TRUE
+           AND wh.day_of_week = EXTRACT(DOW FROM $3::date)::int
+         LEFT JOIN shop_staff_shift_overrides ov ON ov.staff_id=st.id AND ov.work_date=$3::date
          CROSS JOIN LATERAL generate_series(
-           (($3::date + wh.opens_at) AT TIME ZONE c.timezone),
-           ((($3::date + wh.closes_at) - make_interval(mins => c.duration_minutes)) AT TIME ZONE c.timezone),
+           (($3::date + COALESCE(ov.opens_at,wh.opens_at)) AT TIME ZONE c.timezone),
+           ((($3::date + COALESCE(ov.closes_at,wh.closes_at)) - make_interval(mins => c.duration_minutes + c.cleanup_minutes)) AT TIME ZONE c.timezone),
            INTERVAL '15 minutes'
          ) slot
-         WHERE ($4::bigint IS NULL OR st.id = $4)
+         WHERE COALESCE(ov.is_working_day,wh.is_active)=TRUE
+           AND ($4::bigint IS NULL OR st.id = $4)
            AND (NOT EXISTS (SELECT 1 FROM staff_services ss WHERE ss.staff_id = st.id)
                 OR EXISTS (SELECT 1 FROM staff_services ss WHERE ss.staff_id = st.id AND ss.service_id = c.service_id))
        )
@@ -74,12 +77,12 @@ function createBookingRouter(pool, tokenService) {
          AND NOT EXISTS (
            SELECT 1 FROM appointments a
            WHERE a.staff_id = c.staff_id AND a.status IN ('BOOKED','CONFIRMED')
-             AND tstzrange(a.starts_at, a.ends_at, '[)') && tstzrange(c.starts_at, c.ends_at, '[)')
+             AND tstzrange(a.starts_at, a.buffer_ends_at, '[)') && tstzrange(c.starts_at, c.buffer_ends_at, '[)')
          )
          AND NOT EXISTS (
            SELECT 1 FROM staff_time_off t
            WHERE t.staff_id = c.staff_id
-             AND tstzrange(t.starts_at, t.ends_at, '[)') && tstzrange(c.starts_at, c.ends_at, '[)')
+             AND tstzrange(t.starts_at, t.ends_at, '[)') && tstzrange(c.starts_at, c.buffer_ends_at, '[)')
          )
        ORDER BY c.starts_at, c.display_name`,
       [shopId, serviceId, date, staffId]
@@ -259,29 +262,30 @@ function createBookingRouter(pool, tokenService) {
     try {
       await client.query('BEGIN');
       const slot = await client.query(
-        `SELECT sh.timezone, sv.duration_minutes, sv.price, wh.opens_at, wh.closes_at,
+        `SELECT sh.timezone, sv.duration_minutes, sv.cleanup_minutes, sv.price,
+                COALESCE(ov.opens_at,wh.opens_at) opens_at,COALESCE(ov.closes_at,wh.closes_at) closes_at,
                 (($4::timestamptz AT TIME ZONE sh.timezone)::date) AS local_date
          FROM shops sh
          JOIN services sv ON sv.shop_id = sh.id AND sv.id = $2 AND sv.is_active = TRUE
          JOIN shop_staff st ON st.shop_id = sh.id AND st.id = $3 AND st.is_active = TRUE
          JOIN staff_working_hours wh ON wh.staff_id = st.id
            AND wh.day_of_week = EXTRACT(DOW FROM ($4::timestamptz AT TIME ZONE sh.timezone))::int
-           AND wh.is_active = TRUE
-         WHERE sh.id = $1 AND sh.is_active = TRUE
+         LEFT JOIN shop_staff_shift_overrides ov ON ov.staff_id=st.id AND ov.work_date=($4::timestamptz AT TIME ZONE sh.timezone)::date
+         WHERE sh.id = $1 AND sh.is_active = TRUE AND COALESCE(ov.is_working_day,wh.is_active)=TRUE
            AND ($3::bigint IS NOT NULL)
            AND ($4::timestamptz AT TIME ZONE sh.timezone) >=
-               ((($4::timestamptz AT TIME ZONE sh.timezone)::date + wh.opens_at))
-           AND (($4::timestamptz AT TIME ZONE sh.timezone) + make_interval(mins => sv.duration_minutes)) <=
-               ((($4::timestamptz AT TIME ZONE sh.timezone)::date + wh.closes_at))
+               ((($4::timestamptz AT TIME ZONE sh.timezone)::date + COALESCE(ov.opens_at,wh.opens_at)))
+           AND (($4::timestamptz AT TIME ZONE sh.timezone) + make_interval(mins => sv.duration_minutes + sv.cleanup_minutes)) <=
+               ((($4::timestamptz AT TIME ZONE sh.timezone)::date + COALESCE(ov.closes_at,wh.closes_at)))
            AND EXTRACT(MINUTE FROM ($4::timestamptz AT TIME ZONE sh.timezone))::int % 15 = 0
            AND EXTRACT(SECOND FROM ($4::timestamptz AT TIME ZONE sh.timezone)) = 0
            AND (NOT EXISTS (SELECT 1 FROM staff_services ss WHERE ss.staff_id = st.id)
                 OR EXISTS (SELECT 1 FROM staff_services ss WHERE ss.staff_id = st.id AND ss.service_id = sv.id))
            AND NOT EXISTS (SELECT 1 FROM staff_time_off t WHERE t.staff_id = st.id
-             AND tstzrange(t.starts_at,t.ends_at,'[)') && tstzrange($4::timestamptz,$4::timestamptz + make_interval(mins => sv.duration_minutes),'[)'))
+             AND tstzrange(t.starts_at,t.ends_at,'[)') && tstzrange($4::timestamptz,$4::timestamptz + make_interval(mins => sv.duration_minutes + sv.cleanup_minutes),'[)'))
            AND NOT EXISTS (SELECT 1 FROM appointments a WHERE a.staff_id = st.id
              AND a.status IN ('BOOKED','CONFIRMED')
-             AND tstzrange(a.starts_at,a.ends_at,'[)') && tstzrange($4::timestamptz,$4::timestamptz + make_interval(mins => sv.duration_minutes),'[)'))
+             AND tstzrange(a.starts_at,a.buffer_ends_at,'[)') && tstzrange($4::timestamptz,$4::timestamptz + make_interval(mins => sv.duration_minutes + sv.cleanup_minutes),'[)'))
          FOR UPDATE OF st`,
         [shopId, serviceId, staffId, new Date(startMs).toISOString()]
       );
