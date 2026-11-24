@@ -28,7 +28,7 @@ function createBookingRouter(pool, tokenService) {
     const shopId = parseId(req.params.shopId);
     if (!shopId) return res.status(400).json({ error: 'Invalid shop id.' });
     const result = await pool.query(
-      `SELECT id, name, description, duration_minutes, price
+      `SELECT id, name, description, duration_minutes, price, cleanup_minutes, chemical_consent_required
        FROM services WHERE shop_id = $1 AND is_active = TRUE ORDER BY name`,
       [shopId]
     );
