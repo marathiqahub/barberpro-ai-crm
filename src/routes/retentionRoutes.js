@@ -199,15 +199,14 @@ function createRetentionRouter(pool, tokens) {
 }
 
 async function offerWaitlistEntry(db,shopId,entryId,cancelledAppointmentId) {
-  const c=await db.connect?.() ? db : null;
-  if(!c) return null;
+  const c=await db.connect();
   try {
     await c.query('BEGIN');
     const slot=await c.query(`SELECT a.shop_id,a.service_id,a.staff_id,a.starts_at,a.ends_at
       FROM appointments a WHERE a.id=$1 AND a.shop_id=$2 AND a.status='CANCELLED' FOR UPDATE`,[cancelledAppointmentId,shopId]);
     if(!slot.rowCount){await c.query('ROLLBACK');return null;}
     const a=slot.rows[0];
-    const w=await c.query(`SELECT * FROM shop_waitlist_entries WHERE id=$1 AND shop_id=$2 AND service_id=$3
+    const w=await c.query(`SELECT * FROM shop_waitlist_entries WHERE ($1::bigint IS NULL OR id=$1) AND shop_id=$2 AND service_id=$3
       AND requested_date=(($4::timestamptz AT TIME ZONE (SELECT timezone FROM shops WHERE id=$2))::date)
       AND status='WAITING' AND (preferred_staff_id IS NULL OR preferred_staff_id=$5)
       AND (preferred_time_start IS NULL OR ($4::timestamptz AT TIME ZONE (SELECT timezone FROM shops WHERE id=$2))::time>=preferred_time_start)
@@ -215,7 +214,7 @@ async function offerWaitlistEntry(db,shopId,entryId,cancelledAppointmentId) {
       ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`,[entryId,shopId,a.service_id,a.starts_at,a.staff_id]);
     if(!w.rowCount){await c.query('ROLLBACK');return null;}
     const updated=await c.query(`UPDATE shop_waitlist_entries SET status='OFFERED',offered_staff_id=$2,offered_starts_at=$3,offered_ends_at=$4,
-      offer_expires_at=NOW()+INTERVAL '15 minutes',updated_at=NOW() WHERE id=$1 RETURNING *`,[entryId,a.staff_id,a.starts_at,a.ends_at]);
+      offer_expires_at=NOW()+INTERVAL '15 minutes',updated_at=NOW() WHERE id=$1 RETURNING *`,[w.rows[0].id,a.staff_id,a.starts_at,a.ends_at]);
     const customer=await c.query(`SELECT c.channel,c.destination FROM shop_message_consents c JOIN shop_messaging_settings m ON m.shop_id=c.shop_id
       JOIN shop_message_templates t ON t.shop_id=c.shop_id AND t.channel=c.channel AND t.template_key='WAITLIST_OFFER' AND t.is_active=TRUE
       JOIN users u ON u.id=c.customer_id WHERE c.shop_id=$1 AND c.customer_id=$2 AND c.consent=TRUE AND c.revoked_at IS NULL
@@ -223,7 +222,7 @@ async function offerWaitlistEntry(db,shopId,entryId,cancelledAppointmentId) {
       [shopId,w.rows[0].customer_id]);
     for(const ch of customer.rows)await c.query(`INSERT INTO shop_customer_reminders(shop_id,customer_id,appointment_id,channel,template_key,scheduled_at,dedupe_key)
       VALUES($1,$2,$3,$4,'WAITLIST_OFFER',NOW(),$5) ON CONFLICT(dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,
-      [shopId,w.rows[0].customer_id,cancelledAppointmentId,ch.channel,'waitlist:'+entryId+':'+ch.channel]);
+      [shopId,w.rows[0].customer_id,cancelledAppointmentId,ch.channel,'waitlist:'+w.rows[0].id+':'+ch.channel]);
     await c.query('COMMIT');return updated.rows[0];
   } catch(e){await c.query('ROLLBACK');throw e;} finally {c.release();}
 }
