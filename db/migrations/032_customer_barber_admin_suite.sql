@@ -159,3 +159,41 @@ CREATE INDEX IF NOT EXISTS users_imported_pending_idx
   ON users(imported_pending_activation,email) WHERE imported_pending_activation=TRUE;
 
 -- Expired booking reference images are purged by the daily retention task.
+
+-- Include service cleanup in the database's concurrency-safe appointment exclusion.
+ALTER TABLE appointments ADD COLUMN IF NOT EXISTS buffer_ends_at TIMESTAMPTZ;
+UPDATE appointments a SET buffer_ends_at=a.ends_at+make_interval(mins=>s.cleanup_minutes)
+FROM services s WHERE s.id=a.service_id AND a.buffer_ends_at IS NULL;
+UPDATE appointments SET buffer_ends_at=ends_at WHERE buffer_ends_at IS NULL;
+ALTER TABLE appointments ALTER COLUMN buffer_ends_at SET NOT NULL;
+ALTER TABLE appointments DROP CONSTRAINT IF EXISTS appointments_staff_no_overlap;
+ALTER TABLE appointments DROP CONSTRAINT IF EXISTS appointments_staff_buffer_no_overlap;
+ALTER TABLE appointments ADD CONSTRAINT appointments_staff_buffer_no_overlap
+  EXCLUDE USING gist (staff_id WITH =, tstzrange(starts_at,buffer_ends_at,'[)') WITH &&)
+  WHERE(status IN('BOOKED','CONFIRMED'));
+CREATE OR REPLACE FUNCTION set_appointment_buffer_end()
+RETURNS TRIGGER LANGUAGE plpgsql AS $body$
+DECLARE cleanup INTEGER;
+BEGIN
+  SELECT cleanup_minutes INTO cleanup FROM services WHERE id=NEW.service_id;
+  NEW.buffer_ends_at:=NEW.ends_at+make_interval(mins=>COALESCE(cleanup,0));
+  RETURN NEW;
+END $body$;
+DROP TRIGGER IF EXISTS appointments_set_buffer_end ON appointments;
+CREATE TRIGGER appointments_set_buffer_end BEFORE INSERT OR UPDATE OF service_id,ends_at
+  ON appointments FOR EACH ROW EXECUTE FUNCTION set_appointment_buffer_end();
+
+CREATE OR REPLACE FUNCTION require_chemical_service_consent()
+RETURNS TRIGGER LANGUAGE plpgsql AS $body$
+BEGIN
+  IF NEW.status='COMPLETED'
+     AND EXISTS(SELECT 1 FROM services sv WHERE sv.id=NEW.service_id AND sv.chemical_consent_required=TRUE)
+     AND NOT EXISTS(SELECT 1 FROM shop_chemical_service_consents c WHERE c.appointment_id=NEW.id AND c.customer_id=NEW.customer_id) THEN
+    RAISE EXCEPTION 'Signed chemical-service consent is required before completing this appointment'
+      USING ERRCODE='23514';
+  END IF;
+  RETURN NEW;
+END $body$;
+DROP TRIGGER IF EXISTS appointments_require_chemical_consent ON appointments;
+CREATE TRIGGER appointments_require_chemical_consent BEFORE UPDATE OF status ON appointments
+  FOR EACH ROW EXECUTE FUNCTION require_chemical_service_consent();
