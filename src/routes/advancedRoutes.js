@@ -223,9 +223,19 @@ function createAdvancedRouter(pool,tokenService){
   const shopId=id(q.params.shopId),from=q.query.from,to=q.query.to;
   if(!shopId||!validDate(from)||!validDate(to)||from>to||(new Date(to)-new Date(from))/86400000>366)return s.status(400).json({error:'Provide shopId and a valid date range of at most one year.'});
   if(!await featureEnabled(shopId,'ACCOUNTING_EXPORT'))return s.status(403).json({error:'Accounting export is not included in this shop subscription.'});
-  const invoices=await pool.query(`SELECT i.invoice_number,i.issue_date,i.document_type,i.customer_name,i.subtotal_paise,i.discount_paise,i.taxable_paise,i.cgst_paise,i.sgst_paise,i.igst_paise,i.total_paise,
-   COALESCE((SELECT string_agg(p.method||':'||(p.amount_paise::text),';' ORDER BY p.method) FROM sales_invoice_payments p WHERE p.invoice_id=i.id),'UNPAID') payment_allocations
-   FROM sales_invoices i WHERE i.shop_id=$1 AND i.issue_date BETWEEN $2::date AND $3::date AND i.status='ISSUED' ORDER BY i.issue_date,i.invoice_number`,[shopId,from,to]);
+  const invoices=await pool.query(`WITH documents AS (
+    SELECT i.invoice_number,i.issue_date,i.document_type,i.customer_name,i.subtotal_paise,i.discount_paise,i.taxable_paise,
+      i.cgst_paise,i.sgst_paise,i.igst_paise,i.total_paise,
+      COALESCE((SELECT string_agg(p.method||':'||(p.amount_paise::text),';' ORDER BY p.method) FROM sales_invoice_payments p WHERE p.invoice_id=i.id),
+        CASE WHEN i.amount_paid_paise>0 THEN i.payment_mode ELSE 'UNPAID' END) payment_allocations
+    FROM sales_invoices i WHERE i.shop_id=$1 AND i.issue_date BETWEEN $2::date AND $3::date AND i.status='ISSUED'
+    UNION ALL
+    SELECT cn.credit_note_number,cn.issue_date,'CREDIT_NOTE',i.customer_name,cn.taxable_paise,0,cn.taxable_paise,
+      cn.cgst_paise,cn.sgst_paise,cn.igst_paise,cn.total_paise,'CREDIT_NOTE'
+    FROM sales_credit_notes cn JOIN sales_invoices i ON i.id=cn.invoice_id
+    WHERE cn.shop_id=$1 AND cn.issue_date BETWEEN $2::date AND $3::date
+   )
+   SELECT * FROM documents ORDER BY issue_date,invoice_number`,[shopId,from,to]);
   if(!await shopAccess(q.user,shopId))return s.sendStatus(404);
   const rows=invoices.rows.map(i=>({'Voucher Date':i.issue_date,'Voucher Type':i.document_type,'Voucher Number':i.invoice_number,'Party Name':i.customer_name,'Sales Ledger':'Sales','Subtotal (INR)':(Number(i.subtotal_paise)/100).toFixed(2),'Discount (INR)':(Number(i.discount_paise)/100).toFixed(2),'Taxable Value (INR)':(Number(i.taxable_paise)/100).toFixed(2),'CGST (INR)':(Number(i.cgst_paise)/100).toFixed(2),'SGST (INR)':(Number(i.sgst_paise)/100).toFixed(2),'IGST (INR)':(Number(i.igst_paise)/100).toFixed(2),'Total (INR)':(Number(i.total_paise)/100).toFixed(2),'Payment Allocations':i.payment_allocations}));
   const headers=['Voucher Date','Voucher Type','Voucher Number','Party Name','Sales Ledger','Subtotal (INR)','Discount (INR)','Taxable Value (INR)','CGST (INR)','SGST (INR)','IGST (INR)','Total (INR)','Payment Allocations'];
