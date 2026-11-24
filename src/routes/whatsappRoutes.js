@@ -19,7 +19,7 @@ function createWhatsAppRouter(pool,options={}){
    if(!shop.rowCount)continue;const shopId=shop.rows[0].id,body=String(msg.text.body||'').trim();
    const user=await pool.query("SELECT id FROM users WHERE regexp_replace(COALESCE(phone,''),'[^0-9]','','g')=$1 AND role='CUSTOMER' AND is_active=TRUE AND phone_verified_at IS NOT NULL LIMIT 1",[msg.from.replace(/\D/g,'')]);
    let reply='Welcome to '+shop.rows[0].name+'! Reply SERVICES to see services and prices. To request a booking, reply BOOK <service-id> <staff-id> <YYYY-MM-DDTHH:MM:SS+05:30>.';
-   const action=body.match(/^(CONFIRM|CANCEL|ACCEPT)\\s+(\\d+)$/i);
+   const action=body.match(/^(CONFIRM|CANCEL|ACCEPT)\s+(\d+)$/i);
    if(action&&user.rowCount){
     const command=action[1].toUpperCase(),targetId=Number(action[2]);
     if(command==='CONFIRM'){
