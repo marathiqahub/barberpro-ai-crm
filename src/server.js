@@ -19,6 +19,7 @@ const { createPayrollRouter } = require('./routes/payrollRoutes');
 const { createMessagingRouter } = require('./routes/messagingRoutes');
 const { createBookingAssistantRouter } = require('./routes/bookingAssistantRoutes');
 const { createWhatsAppRouter } = require('./routes/whatsappRoutes');
+const { createCustomerExperienceRouter } = require('./routes/customerExperienceRoutes');
 const { loadAuthConfig } = require('./auth/config');
 const { createTokenService } = require('./auth/tokens');
 const { Pool } = require('pg');
@@ -82,6 +83,7 @@ app.use('/api', createPayrollRouter(pool, bookingTokens));
 app.use('/api', createMessagingRouter(pool, bookingTokens));
 app.use('/api', createBookingAssistantRouter(pool, bookingTokens));
 app.use('/api', createWhatsAppRouter(pool));
+app.use('/api', createCustomerExperienceRouter(pool, bookingTokens));
 app.use('/api/payments', paymentRouter);
 app.use('/api/marketing', createMarketingRouter(pool, bookingTokens));
 
