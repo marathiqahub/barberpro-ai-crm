@@ -19,6 +19,7 @@ const { createPayrollRouter } = require('./routes/payrollRoutes');
 const { createMessagingRouter } = require('./routes/messagingRoutes');
 const { createBookingAssistantRouter } = require('./routes/bookingAssistantRoutes');
 const { createWhatsAppRouter } = require('./routes/whatsappRoutes');
+const { createRetentionRouter } = require('./routes/retentionRoutes');
 const { loadAuthConfig } = require('./auth/config');
 const { createTokenService } = require('./auth/tokens');
 const { Pool } = require('pg');
@@ -82,6 +83,7 @@ app.use('/api', createPayrollRouter(pool, bookingTokens));
 app.use('/api', createMessagingRouter(pool, bookingTokens));
 app.use('/api', createBookingAssistantRouter(pool, bookingTokens));
 app.use('/api', createWhatsAppRouter(pool));
+app.use('/api', createRetentionRouter(pool, bookingTokens));
 app.use('/api/payments', paymentRouter);
 app.use('/api/marketing', createMarketingRouter(pool, bookingTokens));
 
@@ -132,6 +134,7 @@ app.post(
 );
 
 const publicDir = require('node:path').join(__dirname, '..', 'public');
+app.get('/queue/:shopId', (req,res) => { if (!/^[1-9]\\d*$/.test(req.params.shopId)) return res.sendStatus(404); res.set('Cache-Control','no-store'); res.sendFile(require('node:path').join(publicDir,'queue.html')); });
 const appHostname = (process.env.APP_HOSTNAME || '').trim().toLowerCase();
 const marketingHostname = (process.env.MARKETING_HOSTNAME || '').trim().toLowerCase();
 const appBaseUrl = (process.env.APP_BASE_URL || '').trim().replace(/\/$/, '');
