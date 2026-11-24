@@ -134,6 +134,16 @@ function createPaymentRouter(pool, tokenService) {
         [eventId, event.event || 'unknown', JSON.stringify(event)]);
       if (inserted.rowCount) {
         const entity = event.payload?.payment?.entity;
+        const paymentLink = event.payload?.payment_link?.entity;
+        if (event.event === 'payment_link.paid' && paymentLink?.id) {
+          await client.query(`UPDATE shop_barber_tips SET status='PAID',razorpay_payment_id=COALESCE($2,razorpay_payment_id),
+            paid_at=COALESCE(to_timestamp(NULLIF($3,0)),NOW()),updated_at=NOW()
+            WHERE razorpay_payment_link_id=$1 AND status='CREATED'`,
+            [paymentLink.id,entity?.id||null,Number(paymentLink.paid_at||0)]);
+        } else if (event.event === 'payment_link.expired' && paymentLink?.id) {
+          await client.query(`UPDATE shop_barber_tips SET status='EXPIRED',updated_at=NOW()
+            WHERE razorpay_payment_link_id=$1 AND status='CREATED'`,[paymentLink.id]);
+        }
         if (entity?.order_id) {
           const status = event.event === 'payment.captured' ? 'CAPTURED' : event.event === 'payment.authorized' ? 'AUTHORIZED' : event.event === 'payment.failed' ? 'FAILED' : null;
           if (status) {
