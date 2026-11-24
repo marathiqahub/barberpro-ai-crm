@@ -80,7 +80,7 @@ async function frontDesk(){
  let searchTimer=null;
  $('#fd-customer-query').oninput=async e=>{
    clearTimeout(searchTimer);const q=e.target.value.trim();if(q.length<2)return;
-   searchTimer=setTimeout(async()=>{try{const d=await api('/front-desk/customers?q='+encodeURIComponent(q));$('#fd-customer').innerHTML=d.customers.map(x=>`<option value="${x.id}">${esc(x.name)} — ${esc(x.email)}</option>`).join('')||'<option value="">No customers found</option>'}catch(x){msg(x.message,true)}},250);
+   searchTimer=setTimeout(async()=>{try{const d=await api('/front-desk/customers?shopId='+shopInput.value+'&q='+encodeURIComponent(q));$('#fd-customer').innerHTML=d.customers.map(x=>`<option value="${x.id}">${esc(x.name)} — ${esc(x.email)}</option>`).join('')||'<option value="">No customers found</option>'}catch(x){msg(x.message,true)}},250);
  };
  $('#fd-walkin').onsubmit=async e=>{
    e.preventDefault();const f=new FormData(e.target);
