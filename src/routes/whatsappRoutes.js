@@ -1,10 +1,14 @@
 'use strict';
 const express=require('express');
+const crypto=require('node:crypto');
 const {deliver}=require('../messaging/delivery');
 function createWhatsAppRouter(pool,options={}){
  const r=express.Router(),env=options.env||process.env,fetchImpl=options.fetchImpl||global.fetch;
  r.get('/webhooks/whatsapp',(q,s)=>{const mode=q.query['hub.mode'],token=q.query['hub.verify_token'],challenge=q.query['hub.challenge'];if(mode==='subscribe'&&token&&token===env.META_WHATSAPP_VERIFY_TOKEN)return s.status(200).send(challenge);return s.sendStatus(403)});
  r.post('/webhooks/whatsapp',async(q,s,n)=>{try{
+  if(!env.META_APP_SECRET)return s.status(503).json({error:'WhatsApp webhook signature verification is not configured.'});
+  const signature=q.get('x-hub-signature-256')||'';const expected='sha256='+crypto.createHmac('sha256',env.META_APP_SECRET).update(q.rawBody||Buffer.alloc(0)).digest('hex');
+  const a=Buffer.from(signature),b=Buffer.from(expected);if(a.length!==b.length||!crypto.timingSafeEqual(a,b))return s.sendStatus(401);
   const entries=q.body?.entry||[];for(const entry of entries)for(const change of entry.changes||[]){const value=change.value||{},phoneId=value.metadata?.phone_number_id;for(const msg of value.messages||[]){
    const messageId=msg.id;if(!messageId||!msg.from||msg.type!=='text')continue;
    const saved=await pool.query('INSERT INTO shop_whatsapp_inbound_messages(provider_message_id,sender,phone_number_id,payload) VALUES($1,$2,$3,$4::jsonb) ON CONFLICT(provider_message_id) DO NOTHING RETURNING id',[messageId,msg.from,phoneId,JSON.stringify(msg)]);
