@@ -170,3 +170,19 @@ The public shop-scoped receptionist endpoint is `POST /api/ai/receptionist`. It 
 The receptionist requires `OPENAI_API_KEY` and supports optional `OPENAI_BASE_URL` and `OPENAI_MODEL`. Requests are rate-limited to 20 per minute per client IP; only the latest eight history messages are sent and each message is limited to 500 characters.
 
 The ADMIN-only `POST /api/admin/ai/insights` endpoint provides shop-level or cross-shop performance analysis for a date range. It uses aggregate appointment outcomes, net captured payments after processed refunds, and popular services. The model receives aggregate metrics only, not customer names, emails, phone numbers or booking notes. AI recommendations are advisory and do not execute operational or financial actions.
+
+
+## Consolidated commercial completion APIs (migration 026)
+
+Apply `db/migrations/026_consolidated_commercial_completion.sql` after migration 025.
+
+- Membership plan creation, assignment and customer membership history.
+- Shop-scoped wallet credit/debit/refund ledger with balance locking and audit events.
+- Gift voucher issuance and partial/full redemption. Voucher codes are returned once and stored only as SHA-256 hashes.
+- Customer feedback for completed appointments and admin feedback review.
+- Reminder queue records for EMAIL, SMS, WhatsApp and in-app channels. This stores scheduled work; delivery requires a configured provider worker.
+- Staff targets and payroll reports combining attendance hours, invoice-linked service sales, commission snapshots and tips.
+- Service-to-inventory recipe configuration and shop audit event retrieval.
+
+Routes are ADMIN-only except the customer feedback submission route. Payroll reports are informational exports, not payroll calculations, statutory deductions, payslips or salary disbursement. Wallet and voucher balances are internal stored value; payment collection, refund and accounting treatment must be reconciled through the existing payment and invoice flows. WhatsApp delivery is not activated without a provider account, approved templates and a worker.
+
