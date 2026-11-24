@@ -49,7 +49,8 @@ async function run(){
    JOIN shop_message_templates t ON t.shop_id=r.shop_id AND t.channel=r.channel AND t.template_key=r.template_key AND t.is_active=TRUE
    LEFT JOIN shop_messaging_settings m ON m.shop_id=r.shop_id
    WHERE r.status='PENDING' AND r.channel IN ('EMAIL','SMS','WHATSAPP') AND r.scheduled_at<=NOW() AND (r.channel<>'WHATSAPP' OR t.provider_template_status='APPROVED')
-   ORDER BY r.scheduled_at,r.id LIMIT 25 FOR UPDATE OF r SKIP LOCKED`);
+     AND (r.channel<>'SMS' OR $1::boolean)
+   ORDER BY r.scheduled_at,r.id LIMIT 25 FOR UPDATE OF r SKIP LOCKED`,[Boolean(process.env.TWILIO_SMS_DLT_ENTITY_ID&&process.env.TWILIO_SMS_DLT_TEMPLATE_ID)]);
   rows=result.rows;for(const row of rows)await client.query("UPDATE shop_customer_reminders SET status='PROCESSING',processing_at=NOW() WHERE id=$1",[row.id]);
   await client.query('COMMIT');
  }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
