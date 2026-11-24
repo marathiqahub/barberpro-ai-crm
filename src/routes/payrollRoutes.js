@@ -25,7 +25,10 @@ function createPayrollRouter(pool,tokens){
    const staff=await c.query(`SELECT DISTINCT ON(st.id) st.id,pp.* FROM shop_staff st JOIN shop_staff_payroll_profiles pp ON pp.staff_id=st.id AND pp.shop_id=st.shop_id
     WHERE st.shop_id=$1 AND st.is_active=TRUE AND pp.active=TRUE AND pp.effective_from<=$3 ORDER BY st.id,pp.effective_from DESC`,[shop,periodStart,periodEnd]);
    for(const p of staff.rows){
-    const sales=await c.query(`SELECT COALESCE(SUM(l.taxable_paise),0)::bigint taxable,COALESCE(SUM(l.tip_paise),0)::bigint tips
+    const sales=await c.query(`SELECT COALESCE(SUM(l.taxable_paise),0)::bigint taxable,
+      (COALESCE(SUM(l.tip_paise),0)+COALESCE((SELECT SUM(t.amount_paise) FROM shop_barber_tips t
+        WHERE t.shop_id=$1 AND t.staff_id=$2 AND t.status='PAID'
+          AND t.paid_at >= $3::date AND t.paid_at < ($4::date+INTERVAL '1 day')),0))::bigint tips
     FROM sales_invoice_lines l JOIN sales_invoices i ON i.id=l.invoice_id WHERE i.shop_id=$1 AND l.staff_id=$2 AND i.status='ISSUED' AND i.issue_date BETWEEN $3 AND $4`,[shop,p.staff_id,periodStart,periodEnd]);
     const earning={commissionPaise:Math.round(Number(sales.rows[0].taxable)*Number(p.commission_rate_bps)/10000),tipsPaise:Number(sales.rows[0].tips)}
     const slip=calculatePayslip(p,earning);

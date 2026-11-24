@@ -4,7 +4,7 @@ const {Pool}=require('pg');
 const {deliver}=require('../src/messaging/delivery');
 const {offerWaitlistEntry}=require('../src/routes/retentionRoutes');
 const pool=new Pool({connectionString:process.env.DATABASE_URL,max:2});
-async function refillExpiredWaitlistOffers(){
+async function purgeExpiredReferencePhotos(){ await pool.query('DELETE FROM shop_appointment_reference_photos WHERE retention_until<=NOW()'); }\nasync function refillExpiredWaitlistOffers(){
  const expired=await pool.query(`UPDATE shop_waitlist_entries SET status='EXPIRED',updated_at=NOW()
   WHERE status='OFFERED' AND offer_expires_at<=NOW() RETURNING shop_id,offered_from_appointment_id`);
  for(const row of expired.rows)if(row.offered_from_appointment_id){
@@ -68,16 +68,21 @@ async function queueRebookingAndReviewNudges(){
 }
 async function run(){
  if(!process.env.DATABASE_URL)throw new Error('DATABASE_URL is required');
- await refillExpiredWaitlistOffers();
+ await purgeExpiredReferencePhotos();\n await refillExpiredWaitlistOffers();
  await queueMissingAppointmentReminders();
  await queueRebookingAndReviewNudges();
  const client=await pool.connect();let rows=[];
  try{
   await client.query('BEGIN');
   await client.query("UPDATE shop_customer_reminders SET status='PENDING',processing_at=NULL WHERE status='PROCESSING' AND processing_at<NOW()-INTERVAL '10 minutes'");
-  const result=await client.query(`SELECT r.*,u.email,u.phone,u.phone_verified_at,u.name AS customer_name,sh.name AS shop_name,sh.timezone AS shop_timezone,a.starts_at AS appointment_starts_at,sv.name AS service_name,t.subject,t.body,m.email_provider,m.whatsapp_provider,m.sender_email,m.sender_name,m.sms_from,m.whatsapp_phone_number_id,m.enabled_channels,t.provider_template_name,t.provider_template_language
+  const result=await client.query(`SELECT r.*,u.email,u.phone,u.phone_verified_at,u.preferred_locale,u.name AS customer_name,sh.name AS shop_name,sh.timezone AS shop_timezone,a.starts_at AS appointment_starts_at,sv.name AS service_name,
+   COALESCE(tr.subject,t.subject) subject,COALESCE(tr.body,t.body) body,m.email_provider,m.whatsapp_provider,m.sender_email,m.sender_name,m.sms_from,m.whatsapp_phone_number_id,m.enabled_channels,
+   COALESCE(tr.provider_template_name,t.provider_template_name) provider_template_name,
+   COALESCE(tr.provider_template_language,t.provider_template_language) provider_template_language,
+   COALESCE(tr.provider_template_status,t.provider_template_status,'PENDING') provider_template_status
    FROM shop_customer_reminders r JOIN users u ON u.id=r.customer_id JOIN shops sh ON sh.id=r.shop_id LEFT JOIN appointments a ON a.id=r.appointment_id LEFT JOIN services sv ON sv.id=a.service_id
    JOIN shop_message_templates t ON t.shop_id=r.shop_id AND t.channel=r.channel AND t.template_key=r.template_key AND t.is_active=TRUE
+   LEFT JOIN shop_message_template_translations tr ON tr.shop_id=r.shop_id AND tr.channel=r.channel AND tr.template_key=r.template_key AND tr.locale=u.preferred_locale
    LEFT JOIN shop_messaging_settings m ON m.shop_id=r.shop_id
    WHERE r.status='PENDING' AND r.channel IN ('EMAIL','SMS','WHATSAPP') AND r.scheduled_at<=NOW()
    ORDER BY r.scheduled_at,r.id LIMIT 25 FOR UPDATE OF r SKIP LOCKED`);
@@ -87,7 +92,7 @@ async function run(){
  for(const row of rows){
   let destination=row.channel==='EMAIL'?row.email:row.phone;
   try{
-   if(row.channel==='SMS'&&(!process.env.TWILIO_SMS_DLT_ENTITY_ID||!process.env.TWILIO_SMS_DLT_TEMPLATE_ID)){await pool.query("UPDATE shop_customer_reminders SET status='PENDING',processing_at=NULL WHERE id=$1",[row.id]);continue;}
+   if(row.channel==='SMS'&&/^\\+?91/.test(destination||'')&&(!process.env.TWILIO_DLT_PE_ID||!row.provider_template_name)){await pool.query("UPDATE shop_customer_reminders SET status='PENDING',processing_at=NULL WHERE id=$1",[row.id]);continue;}
    if(!row.enabled_channels?.includes(row.channel))throw Object.assign(new Error('This channel is not enabled for the shop'),{code:'CHANNEL_DISABLED'});
    if(row.channel!=='EMAIL'&&!row.phone_verified_at)throw Object.assign(new Error('Customer phone number is not verified'),{code:'PHONE_NOT_VERIFIED'});
    if(!destination)throw Object.assign(new Error('Customer has no destination for this channel'),{code:'NO_DESTINATION'});
@@ -96,13 +101,13 @@ async function run(){
     if(!consent.rowCount)throw Object.assign(new Error('No active consent for this channel'),{code:'CONSENT_REQUIRED'});
    }
    const rawTime=row.template_key==='WAITLIST_OFFER'?row.metadata?.offeredStartsAt:row.appointment_starts_at;
-   const locale=String(row.provider_template_language||'en_US').startsWith('hi')?'hi-IN':String(row.provider_template_language||'en_US').startsWith('mr')?'mr-IN':'en-IN';
+   const locale=row.preferred_locale==='hi'?'hi-IN':row.preferred_locale==='mr'?'mr-IN':'en-IN';
    const appointmentTime=rawTime?new Date(rawTime).toLocaleString(locale,{timeZone:row.shop_timezone||'Asia/Kolkata',dateStyle:'medium',timeStyle:'short'}):'';
    const body=String(row.body).replace(/\{\{shop_name\}\}/g,row.shop_name).replace(/\{\{customer_name\}\}/g,row.customer_name).replace(/\{\{appointment_id\}\}/g,String(row.appointment_id||'')).replace(/\{\{waitlist_entry_id\}\}/g,String(row.metadata?.waitlistEntryId||'')).replace(/\{\{appointment_time\}\}/g,appointmentTime).replace(/\{\{service_name\}\}/g,row.service_name||'');
    const templateValue=row.template_key==='WAITLIST_OFFER'?row.metadata?.waitlistEntryId:row.appointment_id;
    const secondValue=['REBOOKING_NUDGE','REVIEW_REQUEST'].includes(row.template_key)?(row.service_name||''):appointmentTime;
    const variables=templateValue==null?{}:{'1':String(templateValue),'2':String(secondValue),'3':String(row.shop_name||'')};
-   const sent=await deliver(row.channel,destination,{subject:row.subject,body,variables},process.env,global.fetch,{provider:row.whatsapp_provider,phoneNumberId:row.whatsapp_phone_number_id,from:row.channel==='SMS'?row.sms_from:row.channel==='EMAIL'?row.sender_email:null,templateName:row.provider_template_name,language:row.provider_template_language||'en_US'});
+   const sent=await deliver(row.channel,destination,{subject:row.subject,body,variables},process.env,global.fetch,{provider:row.whatsapp_provider,phoneNumberId:row.whatsapp_phone_number_id,from:row.channel==='SMS'?row.sms_from:row.channel==='EMAIL'?row.sender_email:null,templateName:row.provider_template_name,templateStatus:row.provider_template_status,language:row.provider_template_language||'en_US'});
    await pool.query("UPDATE shop_customer_reminders SET status='SENT',sent_at=NOW(),processing_at=NULL,provider_reference=$2 WHERE id=$1",[row.id,sent.reference]);
    if(row.related_entity_type==='REVIEW_REQUEST')await pool.query("UPDATE shop_review_requests SET status='SENT' WHERE id=$1",[row.related_entity_id]);
    await pool.query("INSERT INTO shop_message_delivery_attempts(reminder_id,shop_id,channel,destination,provider,status,provider_reference) VALUES($1,$2,$3,$4,$5,'SENT',$6)",[row.id,row.shop_id,row.channel,destination,sent.provider,sent.reference]);
