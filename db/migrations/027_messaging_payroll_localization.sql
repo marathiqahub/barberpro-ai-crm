@@ -1,3 +1,4 @@
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
 -- Messaging, booking assistant, payroll and localization foundation.
 CREATE TABLE IF NOT EXISTS shop_messaging_settings (
  shop_id BIGINT PRIMARY KEY REFERENCES shops(id) ON DELETE CASCADE,
