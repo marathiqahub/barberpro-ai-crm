@@ -159,7 +159,7 @@ function createAdvancedRouter(pool,tokenService){
     await c.query('INSERT INTO staff_time_off(staff_id,starts_at,ends_at,reason) VALUES($1,$2,$3,$4)',[x.staff_id,x.starts_at,x.ends_at,x.reason||'Approved time off']);
    }
    if(decision==='APPROVED'&&x.request_type==='SWAP'){
-    const date=(new Date(x.starts_at)).toISOString().slice(0,10);
+    const date=new Date(new Date(x.starts_at).getTime()+19800000).toISOString().slice(0,10);
     const day=Number((await c.query('SELECT EXTRACT(DOW FROM $1::date)::int d',[date])).rows[0].d);
     const hours=await c.query('SELECT staff_id,opens_at,closes_at,is_active FROM staff_working_hours WHERE staff_id=ANY($1::bigint[]) AND day_of_week=$2',[ [x.staff_id,x.target_staff_id],day]);
     const a=hours.rows.find(h=>String(h.staff_id)===String(x.staff_id)),b=hours.rows.find(h=>String(h.staff_id)===String(x.target_staff_id));
@@ -307,6 +307,30 @@ function createAdvancedRouter(pool,tokenService){
   const map={subscription.activated:'ACTIVE',subscription.authenticated:'AUTHENTICATED',subscription.pending:'PENDING',subscription.halted:'HALTED',subscription.cancelled:'CANCELLED',subscription.completed:'COMPLETED',subscription.charged:'ACTIVE'};
   const status=map[event.event];if(status)await pool.query(`UPDATE shop_subscriptions SET status=$2,current_start=to_timestamp(NULLIF($3,0)),current_end=to_timestamp(NULLIF($4,0)),next_charge_at=to_timestamp(NULLIF($5,0)),provider_payload=provider_payload||$6::jsonb,updated_at=NOW() WHERE razorpay_subscription_id=$1`,[entity.id,status,Number(entity.current_start||0),Number(entity.current_end||0),Number(entity.charge_at||0),JSON.stringify({lastWebhook:event.event})]);
   s.json({received:true});
+ }));
+
+ // Admin policy and localized provider templates; a locale fallback is used until its template is approved.
+ r.put('/admin/shops/:shopId/reschedule-policy',...admin,wrap(async(q,s)=>{
+  const shopId=id(q.params.shopId),hours=Number(q.body?.freeRescheduleBeforeHours);
+  if(!shopId||!Number.isInteger(hours)||hours<0||hours>720)return s.status(400).json({error:'freeRescheduleBeforeHours must be an integer from 0 to 720.'});
+  const out=await pool.query(`INSERT INTO shop_reschedule_policies(shop_id,free_reschedule_before_hours,updated_by)
+   VALUES($1,$2,$3) ON CONFLICT(shop_id) DO UPDATE SET free_reschedule_before_hours=EXCLUDED.free_reschedule_before_hours,updated_by=EXCLUDED.updated_by,updated_at=NOW()
+   RETURNING shop_id,free_reschedule_before_hours`,[shopId,hours,q.user.id]);s.json({policy:out.rows[0]});
+ }));
+ r.put('/admin/shops/:shopId/message-templates/:templateKey/translations/:locale',...admin,wrap(async(q,s)=>{
+  const shopId=id(q.params.shopId),locale=q.params.locale,key=String(q.params.templateKey||''),b=q.body||{};
+  if(!shopId||!['en','hi','mr'].includes(locale)||!/^([A-Z0-9_]{2,40})$/.test(key)||!['EMAIL','SMS','WHATSAPP'].includes(b.channel)||typeof b.body!=='string'||!b.body.trim()||b.body.length>5000)
+   return s.status(400).json({error:'Provide a valid shop, template key, locale, channel and body.'});
+  const status=['PENDING','APPROVED','REJECTED'].includes(b.providerTemplateStatus)?b.providerTemplateStatus:'PENDING';
+  if(b.channel==='WHATSAPP'&&(!b.providerTemplateName||!b.providerTemplateLanguage))return s.status(400).json({error:'WhatsApp translations need the exact Meta template name and language code.'});
+  const out=await pool.query(`INSERT INTO shop_message_template_translations(shop_id,channel,template_key,locale,subject,body,provider_template_name,provider_template_language,provider_template_status,provider_approval_reference,updated_by)
+   VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+   ON CONFLICT(shop_id,channel,template_key,locale) DO UPDATE SET subject=EXCLUDED.subject,body=EXCLUDED.body,provider_template_name=EXCLUDED.provider_template_name,
+    provider_template_language=EXCLUDED.provider_template_language,provider_template_status=EXCLUDED.provider_template_status,
+    provider_approval_reference=EXCLUDED.provider_approval_reference,updated_by=EXCLUDED.updated_by,updated_at=NOW()
+   RETURNING id,shop_id,channel,template_key,locale,provider_template_name,provider_template_language,provider_template_status`,
+   [shopId,b.channel,key,locale,b.subject||null,b.body,b.providerTemplateName||null,b.providerTemplateLanguage||locale,b.providerTemplateStatus||status,b.providerApprovalReference||null,q.user.id]);
+  s.json({translation:out.rows[0]});
  }));
  return r;
 }
