@@ -109,20 +109,20 @@ function createOperationsRouter(pool, tokenService) {
       let subtotal=0,discount=0,taxable=0,cgst=0,sgst=0,igst=0;
       const lines=[];
       for(const item of b.items){
-        const qty=Number(item.quantity),disc=Number(item.discountPaise||0),rate=profile.gst_registered?Number(item.taxRateBps||0):0;
+        const qty=Number(item.quantity),disc=Number(item.discountPaise||0);let rate=profile.gst_registered?Number(item.taxRateBps||0):0,hsnSacCode=item.hsnSacCode||null;
         const inventoryItemId=item.inventoryItemId===undefined||item.inventoryItemId===null||item.inventoryItemId===''?null:id(item.inventoryItemId);
         if(item.inventoryItemId!==undefined&&item.inventoryItemId!==null&&item.inventoryItemId!==''&&!inventoryItemId){await client.query('ROLLBACK');return res.status(400).json({error:'Invalid retail inventory item.'});}
         let price=Number(item.unitPricePaise),description=typeof item.description==='string'?item.description.trim():'';
         if(inventoryItemId){
-          const product=await client.query('SELECT id,name,retail_price_paise,quantity FROM shop_inventory_items WHERE id=$1 AND shop_id=$2 AND is_active=TRUE FOR UPDATE',[inventoryItemId,shopId]);
+          const product=await client.query('SELECT id,name,retail_price_paise,retail_hsn_sac_code,retail_tax_rate_bps,quantity FROM shop_inventory_items WHERE id=$1 AND shop_id=$2 AND is_active=TRUE FOR UPDATE',[inventoryItemId,shopId]);
           if(!product.rowCount){await client.query('ROLLBACK');return res.status(400).json({error:'Retail product is not active in this shop.'});}
           if(Number(product.rows[0].retail_price_paise)<1){await client.query('ROLLBACK');return res.status(400).json({error:'Set a retail selling price for this product before checkout.'});}
           if(Number(product.rows[0].quantity)<qty){await client.query('ROLLBACK');return res.status(409).json({error:'Insufficient retail stock for '+product.rows[0].name+'.'});}
-          price=Number(product.rows[0].retail_price_paise);description=product.rows[0].name;
+          price=Number(product.rows[0].retail_price_paise);description=product.rows[0].name;hsnSacCode=product.rows[0].retail_hsn_sac_code;rate=profile.gst_registered?Number(product.rows[0].retail_tax_rate_bps):0;
         }
-        if(!description||!Number.isFinite(qty)||qty<=0||qty>10000||
+        if(!description||!Number.isFinite(qty)||qty<=0||qty>10000||Number(qty.toFixed(3))!==qty||
            !Number.isSafeInteger(price)||price<0||!Number.isSafeInteger(disc)||disc<0||!Number.isInteger(rate)||rate<0||rate>10000||
-           (item.hsnSacCode && !/^[A-Za-z0-9]{4,8}$/.test(item.hsnSacCode))) {
+           (hsnSacCode && !/^[A-Za-z0-9]{4,8}$/.test(hsnSacCode))) {
           await client.query('ROLLBACK');return res.status(400).json({error:'Each item needs a description, valid quantity, unit price, discount, tax rate and optional HSN/SAC code.'});
         }
         const gross=Math.round(qty*price);
@@ -141,7 +141,7 @@ function createOperationsRouter(pool, tokenService) {
         if(item.serviceId!==undefined&&item.serviceId!==null&&item.serviceId!==''&&!serviceId){await client.query('ROLLBACK');return res.status(400).json({error:'Invalid service catalogue reference.'});}
         if(serviceId){const svc=await client.query('SELECT id FROM services WHERE id=$1 AND shop_id=$2 AND is_active=TRUE',[serviceId,shopId]);if(!svc.rowCount){await client.query('ROLLBACK');return res.status(400).json({error:'Invoice service must be active in this shop.'});}}
         const tip=Number(item.tipPaise||0);if(!Number.isSafeInteger(tip)||tip<0||tip>10000000){await client.query('ROLLBACK');return res.status(400).json({error:'Tip must be a non-negative whole amount in paise.'});}
-        const line={description,hsn:item.hsnSacCode||null,quantity:qty,price,discount:disc,rate,base,cgst:intra?Math.floor(tax/2):0,sgst:intra?tax-Math.floor(tax/2):0,igst:profile.gst_registered&&!intra?tax:0,total:base+tax,staffId,commissionRate,commission:commissionForTaxableAmount(base,commissionRate),serviceId,inventoryItemId,tip};
+        const line={description,hsn:hsnSacCode,quantity:qty,price,discount:disc,rate,base,cgst:intra?Math.floor(tax/2):0,sgst:intra?tax-Math.floor(tax/2):0,igst:profile.gst_registered&&!intra?tax:0,total:base+tax,staffId,commissionRate,commission:commissionForTaxableAmount(base,commissionRate),serviceId,inventoryItemId,tip};
         subtotal+=gross;discount+=disc;taxable+=base;cgst+=line.cgst;sgst+=line.sgst;igst+=line.igst;lines.push(line);
       }
       const total=taxable+cgst+sgst+igst, paid=b.amountPaidPaise||0;
