@@ -49,8 +49,8 @@ function createAdvancedRouter(pool,tokenService){
      WHERE wh.staff_id=$1 AND wh.day_of_week=EXTRACT(DOW FROM ($2::timestamptz AT TIME ZONE $3))::int`,
     [a.staff_id,start.toISOString(),a.timezone]);
    if(!work.rowCount||!work.rows[0].active){await c.query('ROLLBACK');return s.status(409).json({error:'The same barber is not working on the selected date.'});}
-   const local=await c.query(`SELECT ($1::timestamptz AT TIME ZONE $2)::time AS starts,($3::timestamptz AT TIME ZONE $2)::time AS ends`,[start.toISOString(),a.timezone,bufferEnd.toISOString()]);
-   if(local.rows[0].starts<work.rows[0].opens_at||local.rows[0].ends>work.rows[0].closes_at){await c.query('ROLLBACK');return s.status(409).json({error:'The selected time is outside the barber\'s working hours, including cleanup buffer.'});}
+   const local=await c.query(`SELECT ($1::timestamptz AT TIME ZONE $2)::time AS starts,($3::timestamptz AT TIME ZONE $2)::time AS ends,EXTRACT(MINUTE FROM ($1::timestamptz AT TIME ZONE $2))::int minute,EXTRACT(SECOND FROM ($1::timestamptz AT TIME ZONE $2))::int second`,[start.toISOString(),a.timezone,bufferEnd.toISOString()]);
+   if(local.rows[0].minute%15!==0||local.rows[0].second!==0||local.rows[0].starts<work.rows[0].opens_at||local.rows[0].ends>work.rows[0].closes_at){await c.query('ROLLBACK');return s.status(409).json({error:'The selected time is outside the barber\'s working hours, including cleanup buffer.'});}
    const blocked=await c.query(`SELECT 1 FROM staff_time_off t WHERE t.staff_id=$1 AND tstzrange(t.starts_at,t.ends_at,'[)') && tstzrange($2,$3,'[)')
     UNION ALL SELECT 1 FROM appointments x WHERE x.staff_id=$1 AND x.id<>$4 AND x.status IN('BOOKED','CONFIRMED')
       AND tstzrange(x.starts_at,x.buffer_ends_at,'[)') && tstzrange($2,$3,'[)') LIMIT 1`,[a.staff_id,start.toISOString(),bufferEnd.toISOString(),appointmentId]);
