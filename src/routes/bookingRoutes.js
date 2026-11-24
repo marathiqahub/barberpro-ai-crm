@@ -337,6 +337,10 @@ function createBookingRouter(pool, tokenService) {
     );
     if (!result.rowCount) return res.status(404).json({ error: 'Upcoming appointment not found or cannot be cancelled.' });
     try{await pool.query("UPDATE shop_customer_reminders SET status='CANCELLED',processing_at=NULL WHERE appointment_id=$1 AND status IN ('PENDING','PROCESSING')",[appointmentId]);}catch(error){if(error.code!=='42P01')throw error;}
+    await pool.query(`INSERT INTO appointment_extra_payments(appointment_id,customer_id,payment_type,amount_paise)
+      SELECT a.id,a.customer_id,'CANCELLATION_FEE',p.cancellation_fee_paise FROM appointments a JOIN shop_appointment_policies p ON p.shop_id=a.shop_id
+      WHERE a.id=$1 AND p.cancellation_fee_paise>0 AND a.starts_at<=NOW()+make_interval(hours=>p.cancellation_window_hours)
+      ON CONFLICT(appointment_id,payment_type) DO NOTHING`,[appointmentId]);
     const waitlistOffer = await offerNextWaitlist(pool,result.rows[0]);
     res.json({ appointment: result.rows[0], waitlistOffer });
   }));
