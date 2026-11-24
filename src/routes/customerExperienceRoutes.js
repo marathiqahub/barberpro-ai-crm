@@ -112,6 +112,7 @@ function createCustomerExperienceRouter(pool, tokenService, options = {}) {
     if(!out.rowCount)return res.status(404).json({error:'Active shop or service not found.'});
     res.status(201).json({waitlistEntry:out.rows[0]});
   }));
+  router.get('/customer/payments/extra',...customer,wrap(async(req,res)=>{const out=await pool.query('SELECT id,appointment_id,payment_type,amount_paise,status,created_at FROM appointment_extra_payments WHERE customer_id=$1 ORDER BY created_at DESC',[req.user.id]);res.json({payments:out.rows});}));
   router.get('/customer/waitlist',...customer,wrap(async(req,res)=>{
     const out=await pool.query('SELECT e.*,s.name shop_name,sv.name service_name FROM shop_waitlist_entries e JOIN shops s ON s.id=e.shop_id JOIN services sv ON sv.id=e.service_id WHERE e.customer_id=$1 ORDER BY e.created_at DESC',[req.user.id]);
     res.json({entries:out.rows});
@@ -187,7 +188,7 @@ function createCustomerExperienceRouter(pool, tokenService, options = {}) {
     if(!shopId||!Number.isInteger(days)||days<7||days>365||typeof enabled!=='boolean')return res.status(400).json({error:'Provide an interval from 7 to 365 days and enabled preference.'});
     const out=await pool.query(`INSERT INTO shop_customer_rebooking_profiles(shop_id,customer_id,interval_days,enabled)
       SELECT id,$2,$3,$4 FROM shops WHERE id=$1 AND is_active=TRUE
-      ON CONFLICT(shop_id,customer_id) DO UPDATE SET interval_days=EXCLUDED.interval_days,enabled=EXCLUDED.enabled,updated_at=NOW()
+      ON CONFLICT(shop_id,customer_id) DO UPDATE SET interval_days=EXCLUDED.interval_days,interval_source='MANUAL',enabled=EXCLUDED.enabled,updated_at=NOW()
       RETURNING *`,[shopId,req.user.id,days,enabled]);
     if(!out.rowCount)return res.status(404).json({error:'Active shop not found.'});
     res.json({preference:out.rows[0]});
