@@ -322,13 +322,18 @@ function createAdvancedRouter(pool,tokenService){
  }));
  r.post('/admin/shops/:shopId/subscription',...admin,wrap(async(q,s)=>{
   const shopId=id(q.params.shopId),planId=id(q.body?.planId);if(!shopId||!planId)return s.status(400).json({error:'Valid shopId and planId are required.'});
-  if((await pool.query("SELECT 1 FROM shop_subscriptions WHERE shop_id=$1 AND status IN('CREATED','AUTHENTICATED','ACTIVE','PENDING') LIMIT 1",[shopId])).rowCount)return s.status(409).json({error:'This shop already has a pending or active subscription.'});
-  const [shop,plan]=await Promise.all([pool.query('SELECT id,name FROM shops WHERE id=$1 AND is_active=TRUE',[shopId]),pool.query('SELECT * FROM barberpro_subscription_plans WHERE id=$1 AND is_active=TRUE',[planId])]);
-  if(!shop.rowCount||!plan.rowCount||!plan.rows[0].razorpay_plan_id)return s.status(404).json({error:'Active shop or configured Razorpay plan not found.'});
-  const sub=await razorpay('/subscriptions','POST',{plan_id:plan.rows[0].razorpay_plan_id,total_count:plan.rows[0].billing_period==='YEARLY'?5:60,quantity:1,customer_notify:0,notes:{shopId:String(shopId),planId:String(planId),shopName:shop.rows[0].name}});
-  const saved=await pool.query(`INSERT INTO shop_subscriptions(shop_id,plan_id,razorpay_subscription_id,status,short_url,provider_payload,created_by)
+  const c=await pool.connect();try{await c.query('BEGIN');
+   const shop=await c.query('SELECT id,name FROM shops WHERE id=$1 AND is_active=TRUE FOR UPDATE',[shopId]);
+   if(!shop.rowCount){await c.query('ROLLBACK');return s.status(404).json({error:'Active shop not found.'});}
+   const existing=await c.query("SELECT 1 FROM shop_subscriptions WHERE shop_id=$1 AND status IN('CREATED','AUTHENTICATED','ACTIVE','PENDING') LIMIT 1",[shopId]);
+   if(existing.rowCount){await c.query('ROLLBACK');return s.status(409).json({error:'This shop already has a pending or active subscription.'});}
+   const plan=await c.query('SELECT * FROM barberpro_subscription_plans WHERE id=$1 AND is_active=TRUE',[planId]);
+   if(!plan.rowCount||!plan.rows[0].razorpay_plan_id){await c.query('ROLLBACK');return s.status(404).json({error:'Configured Razorpay plan not found.'});}
+   const sub=await razorpay('/subscriptions','POST',{plan_id:plan.rows[0].razorpay_plan_id,total_count:plan.rows[0].billing_period==='YEARLY'?5:60,quantity:1,customer_notify:0,notes:{shopId:String(shopId),planId:String(planId),shopName:shop.rows[0].name}});
+   const saved=await c.query(`INSERT INTO shop_subscriptions(shop_id,plan_id,razorpay_subscription_id,status,short_url,provider_payload,created_by)
     VALUES($1,$2,$3,$4,$5,$6::jsonb,$7) RETURNING *`,[shopId,planId,sub.id,sub.status?.toUpperCase()||'CREATED',sub.short_url,JSON.stringify(sub),q.user.id]);
-  s.status(201).json({subscription:saved.rows[0],checkoutUrl:sub.short_url});
+   await c.query('COMMIT');s.status(201).json({subscription:saved.rows[0],checkoutUrl:sub.short_url});
+  }catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}
  }));
  r.get('/admin/shops/:shopId/subscription',...admin,wrap(async(q,s)=>{
   const shopId=id(q.params.shopId);if(!shopId)return s.sendStatus(400);
@@ -342,7 +347,7 @@ function createAdvancedRouter(pool,tokenService){
   s.json({active:Boolean(out.rowCount),status:out.rows[0]?.status||'UNSUBSCRIBED',features:out.rows[0]?.feature_entitlements||{}});
  }));
  r.post('/subscriptions/webhook',wrap(async(q,s)=>{
-  const secret=process.env.RAZORPAY_WEBHOOK_SECRET;if(!secret)return s.status(503).send('Webhook secret is not configured.');
+  const secret=process.env.RAZORPAY_SUBSCRIPTION_WEBHOOK_SECRET||process.env.RAZORPAY_WEBHOOK_SECRET;if(!secret)return s.status(503).send('Subscription webhook secret is not configured.');
   const sig=q.get('x-razorpay-signature')||'',raw=q.rawBody||Buffer.from(JSON.stringify(q.body||{}));if(!safeEqual(hmac(secret,raw),sig))return s.sendStatus(400);
   const event=q.body||{},entity=event.payload?.subscription?.entity;if(!entity?.id)return s.json({received:true,ignored:true});
   const map={'subscription.activated':'ACTIVE','subscription.authenticated':'AUTHENTICATED','subscription.pending':'PENDING','subscription.halted':'HALTED','subscription.cancelled':'CANCELLED','subscription.completed':'COMPLETED','subscription.charged':'ACTIVE'};
