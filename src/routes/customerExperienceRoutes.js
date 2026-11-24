@@ -118,6 +118,7 @@ function createCustomerExperienceRouter(pool, tokenService, options = {}) {
     res.status(201).json({waitlistEntry:out.rows[0]});
   }));
   router.get('/customer/payments/extra',...customer,wrap(async(req,res)=>{const out=await pool.query('SELECT id,appointment_id,payment_type,amount_paise,status,created_at FROM appointment_extra_payments WHERE customer_id=$1 ORDER BY created_at DESC',[req.user.id]);res.json({payments:out.rows});}));
+  router.get('/customer/waitlist-offers',...customer,wrap(async(req,res)=>{const out=await pool.query("SELECT o.id,o.shop_id,o.service_id,o.staff_id,o.starts_at,o.ends_at,o.expires_at,s.name shop_name,sv.name service_name,st.display_name FROM shop_waitlist_offers o JOIN shops s ON s.id=o.shop_id JOIN services sv ON sv.id=o.service_id JOIN shop_staff st ON st.id=o.staff_id WHERE o.customer_id=$1 AND o.status='OFFERED' AND o.expires_at>NOW() ORDER BY o.expires_at",[req.user.id]);res.json({offers:out.rows});}));
   router.get('/customer/waitlist',...customer,wrap(async(req,res)=>{
     const out=await pool.query('SELECT e.*,s.name shop_name,sv.name service_name FROM shop_waitlist_entries e JOIN shops s ON s.id=e.shop_id JOIN services sv ON sv.id=e.service_id WHERE e.customer_id=$1 ORDER BY e.created_at DESC',[req.user.id]);
     res.json({entries:out.rows});
