@@ -353,7 +353,7 @@ function createAdvancedRouter(pool,tokenService){
  r.get('/shops/:shopId/feature-entitlements',authenticate,wrap(async(q,s)=>{
   const shopId=id(q.params.shopId);if(!shopId||!await shopAccess(q.user,shopId))return s.sendStatus(404);
   const out=await pool.query(`SELECT p.feature_entitlements,ss.status FROM shop_subscriptions ss JOIN barberpro_subscription_plans p ON p.id=ss.plan_id
-   WHERE ss.shop_id=$1 AND ss.status IN('ACTIVE','AUTHENTICATED') ORDER BY ss.created_at DESC LIMIT 1`,[shopId]);
+   WHERE ss.shop_id=$1 AND ss.status='ACTIVE' ORDER BY ss.created_at DESC LIMIT 1`,[shopId]);
   s.json({active:Boolean(out.rowCount),status:out.rows[0]?.status||'UNSUBSCRIBED',features:out.rows[0]?.feature_entitlements||{}});
  }));
  r.post('/subscriptions/webhook',wrap(async(q,s)=>{
