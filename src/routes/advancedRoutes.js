@@ -299,10 +299,12 @@ function createAdvancedRouter(pool,tokenService){
  }));
  r.post('/auth/totp/disable',...authenticate,wrap(async(q,s)=>{
   if(!['ADMIN','BARBER'].includes(q.user.role))return s.sendStatus(403);
-  const out=await pool.query('SELECT secret_encrypted,enabled FROM user_totp WHERE user_id=$1',[q.user.id]);
-  if(!out.rows[0]?.enabled||!verifyTotp(decryptSecret(out.rows[0].secret_encrypted),q.body?.code))return s.status(400).json({error:'A valid authenticator code is required to disable 2FA.'});
+  const out=await pool.query('SELECT secret_encrypted,enabled,last_verified_step FROM user_totp WHERE user_id=$1',[q.user.id]);
+  if(!out.rows[0]?.enabled)return s.status(400).json({error:'Authenticator is not enabled.'});
+  const step=matchingTotpStep(decryptSecret(out.rows[0].secret_encrypted),q.body?.code);
+  if(step===null||out.rows[0].last_verified_step!==null&&Number(out.rows[0].last_verified_step)>=step)return s.status(400).json({error:'A fresh, unused authenticator code is required to disable 2FA.'});
   if(process.env.TOTP_REQUIRED_FOR_PRIVILEGED==='true')return s.status(403).json({error:'Two-factor authentication is required by platform policy and cannot be disabled here.'});
-  await pool.query('UPDATE user_totp SET secret_encrypted=NULL,pending_secret_encrypted=NULL,enabled=FALSE,updated_at=NOW() WHERE user_id=$1',[q.user.id]);s.json({enabled:false});
+  await pool.query('UPDATE user_totp SET secret_encrypted=NULL,pending_secret_encrypted=NULL,enabled=FALSE,last_verified_step=$2,updated_at=NOW() WHERE user_id=$1',[q.user.id,step]);s.json({enabled:false});
  }));
 
  // Plan catalog and Razorpay Subscriptions for BarberPro shop billing.
