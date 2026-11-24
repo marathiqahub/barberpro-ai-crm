@@ -8,7 +8,7 @@ async function scheduleAppointmentReminders(db,appointment,options={}){
    SELECT c.shop_id,c.customer_id,$3,'WHATSAPP','APPOINTMENT_REMINDER_24H',GREATEST(NOW(),$4::timestamptz-INTERVAL '24 hours')
    FROM shop_message_consents c
    JOIN shop_messaging_settings m ON m.shop_id=c.shop_id AND 'WHATSAPP'=ANY(m.enabled_channels)
-   JOIN shop_message_templates t ON t.shop_id=c.shop_id AND t.channel='WHATSAPP' AND t.template_key='APPOINTMENT_REMINDER_24H' AND t.is_active=TRUE AND t.provider_template_status='APPROVED'
+   JOIN shop_message_templates t ON t.shop_id=c.shop_id AND t.channel='WHATSAPP' AND t.template_key='APPOINTMENT_REMINDER_24H' AND t.is_active=TRUE AND t.provider_template_status='APPROVED' AND t.provider_template_name IS NOT NULL
    JOIN users u ON u.id=c.customer_id
    WHERE c.shop_id=$1 AND c.customer_id=$2 AND c.channel='WHATSAPP' AND c.consent=TRUE AND c.revoked_at IS NULL
     AND c.destination=u.phone AND $4::timestamptz>NOW()+INTERVAL '24 hours'
