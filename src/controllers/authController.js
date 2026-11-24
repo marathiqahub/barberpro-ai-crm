@@ -1,7 +1,7 @@
 const argon2 = require('argon2');
 const { createTokenService } = require('../auth/tokens');
 const crypto = require('node:crypto');
-const { generateSecret, encryptSecret, decryptSecret, verifyTotp, otpauthUri } = require('../advanced/totp');
+const { generateSecret, encryptSecret, decryptSecret, matchingTotpStep, otpauthUri } = require('../advanced/totp');
 
 const passwordHashOptions = { type: argon2.argon2id, memoryCost: 19456, timeCost: 2, parallelism: 1 };
 const dummyPasswordHashPromise = argon2.hash('not-a-real-user-password-for-timing-equalization', passwordHashOptions);
@@ -120,8 +120,11 @@ function createAuthController(pool, authConfig) {
           enrollmentToken,secret,otpauthUri:otpauthUri(secret,user.email)});
       }
       if (['ADMIN','BARBER'].includes(user.role) && user.totp_enabled) {
-        if (!req.body?.totpCode || !verifyTotp(decryptSecret(user.secret_encrypted),req.body.totpCode))
-          return res.status(401).json({error:'A valid authenticator code is required.',mfaRequired:true});
+        const step=matchingTotpStep(decryptSecret(user.secret_encrypted),req.body?.totpCode);
+        if(step===null)return res.status(401).json({error:'A valid authenticator code is required.',mfaRequired:true});
+        const consumed=await pool.query(`UPDATE user_totp SET last_verified_step=$2,updated_at=NOW()
+          WHERE user_id=$1 AND enabled=TRUE AND (last_verified_step IS NULL OR last_verified_step<$2) RETURNING user_id`,[user.id,step]);
+        if(!consumed.rowCount)return res.status(401).json({error:'This authenticator code has already been used. Wait for the next code.',mfaRequired:true});
       }
 
       const pair = tokens.issueTokenPair(user);
