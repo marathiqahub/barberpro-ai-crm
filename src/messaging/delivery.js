@@ -11,7 +11,7 @@ async function deliver(channel,destination,content,env=process.env,fetchImpl=glo
   const from=meta.from||(channel==='SMS'?env.TWILIO_SMS_FROM:env.TWILIO_WHATSAPP_FROM);
   if(!from)throw Object.assign(new Error('Twilio sender is not configured'),{code:'SENDER_NOT_CONFIGURED'});
   const fields={To:(channel==='WHATSAPP'?'whatsapp:':'')+destination,From:from};
-  if(channel==='SMS'&&/^\\+91/.test(destination)&&env.TWILIO_INDIA_SMS_ROUTE!=='INTERNATIONAL'){
+  if(channel==='SMS'&&/^\+91/.test(destination)&&env.TWILIO_INDIA_SMS_ROUTE!=='INTERNATIONAL'){
    if(!env.TWILIO_DLT_PE_ID||!meta.templateName)throw Object.assign(new Error('India domestic SMS requires a registered Twilio DLT PE ID and an approved DLT template ID'),{code:'DLT_TEMPLATE_REQUIRED'});
    fields.DltPEId=env.TWILIO_DLT_PE_ID;fields.DltTemplateId=meta.templateName;
   }
