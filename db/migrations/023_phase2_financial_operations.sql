@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS shop_daily_closures (
   shop_id BIGINT NOT NULL REFERENCES shops(id) ON DELETE RESTRICT,
   business_date DATE NOT NULL,
   opening_float_paise BIGINT NOT NULL CHECK (opening_float_paise >= 0),
+  cash_refunds_paise BIGINT NOT NULL DEFAULT 0 CHECK (cash_refunds_paise >= 0),
   cash_paid_out_paise BIGINT NOT NULL DEFAULT 0 CHECK (cash_paid_out_paise >= 0),
   cash_deposited_paise BIGINT NOT NULL DEFAULT 0 CHECK (cash_deposited_paise >= 0),
   cash_counted_paise BIGINT NOT NULL CHECK (cash_counted_paise >= 0),
