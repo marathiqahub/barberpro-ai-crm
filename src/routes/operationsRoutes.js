@@ -292,6 +292,47 @@ function createOperationsRouter(pool, tokenService) {
     }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
   }));
 
+
+  router.get('/shops/:shopId/gst-returns/summary', ...admin, asyncRoute(async(req,res)=>{
+    const shopId=id(req.params.shopId),from=req.query.from,to=req.query.to;
+    if(!shopId||!validDate(from)||!validDate(to)||from>to)return res.status(400).json({error:'Provide a valid shop and date range.'});
+    const shop=await pool.query('SELECT id FROM shops WHERE id=$1 AND is_active=TRUE',[shopId]);
+    if(!shop.rowCount)return res.status(404).json({error:'Active shop not found.'});
+    const result=await pool.query(
+      `SELECT
+       COALESCE(SUM(i.taxable_paise),0)::bigint invoice_taxable_paise,
+       COALESCE(SUM(i.cgst_paise),0)::bigint invoice_cgst_paise,
+       COALESCE(SUM(i.sgst_paise),0)::bigint invoice_sgst_paise,
+       COALESCE(SUM(i.igst_paise),0)::bigint invoice_igst_paise,
+       COALESCE(SUM(i.total_paise),0)::bigint invoice_total_paise,
+       (SELECT COALESCE(SUM(c.taxable_paise),0)::bigint FROM sales_credit_notes c
+         WHERE c.shop_id=$1 AND c.issue_date BETWEEN $2::date AND $3::date) credit_taxable_paise,
+       (SELECT COALESCE(SUM(c.cgst_paise),0)::bigint FROM sales_credit_notes c
+         WHERE c.shop_id=$1 AND c.issue_date BETWEEN $2::date AND $3::date) credit_cgst_paise,
+       (SELECT COALESCE(SUM(c.sgst_paise),0)::bigint FROM sales_credit_notes c
+         WHERE c.shop_id=$1 AND c.issue_date BETWEEN $2::date AND $3::date) credit_sgst_paise,
+       (SELECT COALESCE(SUM(c.igst_paise),0)::bigint FROM sales_credit_notes c
+         WHERE c.shop_id=$1 AND c.issue_date BETWEEN $2::date AND $3::date) credit_igst_paise,
+       (SELECT COALESCE(SUM(c.total_paise),0)::bigint FROM sales_credit_notes c
+         WHERE c.shop_id=$1 AND c.issue_date BETWEEN $2::date AND $3::date) credit_total_paise
+       FROM sales_invoices i
+       WHERE i.shop_id=$1 AND i.issue_date BETWEEN $2::date AND $3::date
+         AND i.document_type='TAX_INVOICE' AND i.status='ISSUED'`,
+      [shopId,from,to]);
+    const x=result.rows[0];
+    const net=(a,b)=>String(Number(x[a])-Number(x[b]));
+    res.json({shopId,from,to,filingStatus:'PREPARATION_ONLY',filingPerformed:false,summary:{
+      invoiceTaxablePaise:x.invoice_taxable_paise,invoiceCgstPaise:x.invoice_cgst_paise,
+      invoiceSgstPaise:x.invoice_sgst_paise,invoiceIgstPaise:x.invoice_igst_paise,invoiceTotalPaise:x.invoice_total_paise,
+      creditTaxablePaise:x.credit_taxable_paise,creditCgstPaise:x.credit_cgst_paise,
+      creditSgstPaise:x.credit_sgst_paise,creditIgstPaise:x.credit_igst_paise,creditTotalPaise:x.credit_total_paise,
+      netTaxablePaise:net('invoice_taxable_paise','credit_taxable_paise'),
+      netCgstPaise:net('invoice_cgst_paise','credit_cgst_paise'),
+      netSgstPaise:net('invoice_sgst_paise','credit_sgst_paise'),
+      netIgstPaise:net('invoice_igst_paise','credit_igst_paise')
+    }});
+  }));
+
   router.get('/shops/:shopId/gst-returns/export', ...admin, asyncRoute(async(req,res)=>{
     const shopId=id(req.params.shopId),from=req.query.from,to=req.query.to;
     if(!shopId||!/^\d{4}-\d{2}-\d{2}$/.test(from||'')||!/^\d{4}-\d{2}-\d{2}$/.test(to||'')||from>to) return res.status(400).json({error:'Provide shopId and a valid date range.'});
