@@ -50,6 +50,10 @@ services:
         sync: false
       - key: TWILIO_SMS_FROM
         sync: false
+      - key: TWILIO_SMS_DLT_ENTITY_ID
+        sync: false
+      - key: TWILIO_SMS_DLT_TEMPLATE_ID
+        sync: false
       - key: TWILIO_WHATSAPP_FROM
         sync: false
       - key: META_WHATSAPP_TOKEN
