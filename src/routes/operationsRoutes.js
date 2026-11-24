@@ -1,4 +1,6 @@
 const express = require('express');
+const argon2 = require('argon2');
+const crypto = require('node:crypto');
 const { createAuthMiddleware } = require('../auth/middleware');
 
 function createOperationsRouter(pool, tokenService) {
@@ -33,6 +35,29 @@ function createOperationsRouter(pool, tokenService) {
     );
     return prefix + '/' + fy + '/' + String(result.rows[0].last_number).padStart(4, '0');
   }
+
+  router.post('/admin/front-desk-users', ...admin, asyncRoute(async(req,res)=>{
+    const b=req.body||{},name=typeof b.name==='string'?b.name.trim():'',email=typeof b.email==='string'?b.email.trim().toLowerCase():'',shopId=id(b.shopId);
+    if(!shopId||!name||name.length>120||email.length>254||! /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) return res.status(400).json({error:'Provide a valid name, email and shopId.'});
+    const client=await pool.connect();
+    try{
+      await client.query('BEGIN');
+      const shop=await client.query('SELECT id FROM shops WHERE id=$1 AND is_active=TRUE',[shopId]);
+      if(!shop.rowCount){await client.query('ROLLBACK');return res.status(404).json({error:'Active shop not found.'});}
+      const exists=await client.query('SELECT id FROM users WHERE email=$1',[email]);
+      if(exists.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'An account with this email already exists.'});}
+      const placeholder=await argon2.hash(crypto.randomBytes(48).toString('base64url'),{type:argon2.argon2id,memoryCost:19456,timeCost:2,parallelism:1});
+      const created=await client.query(
+        `INSERT INTO users (name,email,password_hash,role,is_active) VALUES ($1,$2,$3,'FRONT_DESK',FALSE) RETURNING id,name,email,role`,
+        [name,email,placeholder]);
+      await client.query('INSERT INTO shop_front_desk (shop_id,user_id) VALUES ($1,$2)',[shopId,created.rows[0].id]);
+      const token=crypto.randomBytes(32).toString('base64url'),hash=crypto.createHash('sha256').update(token).digest('hex');
+      const expiresAt=new Date(Date.now()+48*60*60*1000);
+      await client.query('INSERT INTO account_activation_tokens (user_id,token_hash,expires_at) VALUES ($1,$2,$3)',[created.rows[0].id,hash,expiresAt]);
+      await client.query('COMMIT');
+      return res.status(201).json({user:created.rows[0],shopId,activationEndpoint:'/api/operator/activate',activationToken:token,expiresAt:expiresAt.toISOString(),message:'Share this one-time activation token securely with the intended front-desk user. It expires in 48 hours.'});
+    }catch(error){await client.query('ROLLBACK');if(error.code==='23505')return res.status(409).json({error:'Account or shop assignment already exists.'});throw error;}finally{client.release();}
+  }));
 
   router.get('/shops/:shopId/tax-profile', ...frontDesk, asyncRoute(async (req,res) => {
     const shopId=id(req.params.shopId);
