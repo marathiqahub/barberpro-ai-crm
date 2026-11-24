@@ -26,7 +26,7 @@ function verifyTotp(secret,code,at=Date.now(),window=1){
   return false;
 }
 function encryptionKey(env=process.env){
-  if(!env.TOTP_ENCRYPTION_KEY||Buffer.byteLength(env.TOTP_ENCRYPTION_KEY)<32)throw Object.assign(new Error('TOTP_ENCRYPTION_KEY must contain at least 32 bytes.'),{code:'TOTP_KEY_NOT_CONFIGURED'});
+  if(!env.TOTP_ENCRYPTION_KEY||Buffer.byteLength(env.TOTP_ENCRYPTION_KEY)<32)throw Object.assign(new Error('TOTP_ENCRYPTION_KEY must contain at least 32 bytes.'),{code:'TOTP_KEY_NOT_CONFIGURED',status:503});
   return crypto.createHash('sha256').update(env.TOTP_ENCRYPTION_KEY).digest();
 }
 function encryptSecret(secret,env=process.env){
