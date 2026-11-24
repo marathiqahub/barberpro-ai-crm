@@ -1,0 +1,113 @@
+/* BarberPro Classic Barber palette — shared by marketing, CRM and demo */
+:root{
+ --bp-black:#141414;--bp-red:#B91C1C;--bp-gold:#C9A227;--bp-cream:#F7F4EE;
+ --bp-white:#FFFFFF;--bp-slate:#6B7280;--bp-green:#15803D;--bp-amber:#B45309;--bp-danger:#DC2626;
+ --bp-line:#14141418;--bp-muted:#6B7280;--bp-panel:#FFFFFF;--bp-soft:#F1ECE3;
+ color-scheme:light;
+}
+html,body{background:var(--bp-cream);color:var(--bp-black)}
+body{background-color:var(--bp-cream)}
+a{color:var(--bp-red)}
+:focus-visible{outline:3px solid var(--bp-gold);outline-offset:3px}
+button,input,select,textarea{font:inherit}
+::selection{background:#C9A22755;color:#141414}
+/* Shared navigation and primary actions */
+.nav,.top,.demo-top{background:var(--bp-black)!important;color:var(--bp-white);border-color:#ffffff22}
+.nav nav a,.nav-actions>a:first-child,.top nav a{color:#F7F4EE}
+.logo,.brand{color:var(--bp-white)!important}
+.brand span{color:var(--bp-gold)!important}
+.btn,.primary,.submit{background:var(--bp-red)!important;color:#fff!important;border:1px solid var(--bp-red)!important}
+.btn:hover,.primary:hover,.submit:hover{background:#991B1B!important}
+.link,.top-cta,.text-btn,.sidebar-bottom>a{color:var(--bp-red)!important}
+.menu{color:#fff!important}
+.eyebrow,.plans article>small,.segments small{color:var(--bp-red)!important}
+.muted,.sub,.fine,.proof{color:var(--bp-slate)!important}
+/* Marketing site */
+body:has(.nav){background:var(--bp-cream)!important;color:var(--bp-black)}
+.nav{border-bottom:1px solid #ffffff24}
+.hero{color:var(--bp-black)}
+.hero h1 em{color:var(--bp-red)!important}
+.lead{color:var(--bp-slate)!important}
+.preview,.founders{background:var(--bp-black)!important;color:var(--bp-white);border:1px solid #141414}
+.preview .stats div,.preview .board,.offer{background:#242424!important;border-color:#ffffff25}
+.preview-head small,.stats small,.offer small,.board p span{color:#d1d5db!important}
+.preview-head>span{color:var(--bp-gold)!important}
+.trust{color:var(--bp-black)!important;border-color:var(--bp-line)}
+.section{color:var(--bp-black)}
+.features article,.segments article,.plans article,.demo form{background:var(--bp-white)!important;color:var(--bp-black)!important;border:1px solid var(--bp-line)!important;box-shadow:0 8px 24px #14141408}
+.features p,.segments p,.plans ul,.founders p:not(.eyebrow){color:var(--bp-slate)!important}
+.segments a,.outline{color:var(--bp-red)!important;border-color:#B91C1C66}
+.plans article.popular{border:2px solid var(--bp-gold)!important}
+.popular label{background:var(--bp-gold)!important;color:var(--bp-black)!important}
+.price{color:var(--bp-black)}
+.price small,.annual{color:var(--bp-slate)!important}
+.offer b{color:var(--bp-gold)}
+.demo input,.demo select,.demo textarea{background:#fff!important;color:var(--bp-black)!important;border:1px solid #6B728055!important}
+.demo form label{color:var(--bp-black)!important}
+.consent span{color:var(--bp-slate)}
+.faq details{border-color:var(--bp-line)}
+.faq summary{color:var(--bp-black)}
+.faq details p{color:var(--bp-slate)}
+footer{background:var(--bp-black);color:#fff;border-color:#ffffff22}
+footer p,footer small,footer div{color:#d1d5db}
+footer a{color:var(--bp-gold)!important}
+/* CRM authenticated workspace */
+body:has(#app){background:var(--bp-cream)!important;color:var(--bp-black)}
+.top{color:#fff}
+.top nav a:hover{color:var(--bp-gold)}
+.ghost,.tabs button{color:#fff}
+.tabs .active{background:var(--bp-cream)!important;color:var(--bp-red)!important}
+.welcome{color:var(--bp-black)}
+.welcome h1 em{color:var(--bp-red)!important}
+.welcome>p:not(.eyebrow){color:var(--bp-slate)!important}
+.card,.panel,.auth{background:var(--bp-white)!important;color:var(--bp-black)!important;border:1px solid var(--bp-line)!important;box-shadow:0 8px 24px #14141408}
+label{color:var(--bp-black)!important}
+input,select,textarea{background:#fff!important;color:var(--bp-black)!important;border:1px solid #6B728066!important}
+#notice{color:var(--bp-green)!important}
+.error{color:var(--bp-danger)!important}
+.good{color:var(--bp-green)!important}
+.chip,.actions button{background:var(--bp-soft)!important;color:var(--bp-red)!important;border:1px solid #B91C1C22}
+.item{border-color:var(--bp-line)!important}
+.item small,.empty{color:var(--bp-slate)!important}
+th{color:var(--bp-red)!important}
+td{color:var(--bp-black)}
+/* Interactive demo */
+body:has(.demo-shell){background:var(--bp-cream)!important;color:var(--bp-black)}
+.demo-top{height:68px}
+.demo-label{color:#F7F4EE}
+.sidebar{background:var(--bp-black)!important;color:#fff;border-color:#ffffff24}
+.shop-avatar{background:var(--bp-gold)!important;color:var(--bp-black)!important}
+.shop-switch small,.shop-switch>span{color:#d1d5db}
+.nav-item{color:#e5e7eb}
+.nav-item span{color:var(--bp-gold)}
+.nav-item.active,.nav-item:hover{background:#333!important;color:#fff}
+.nav-item i{background:var(--bp-red);color:#fff}
+.sample-note,.sample-banner,.tip-card{background:var(--bp-soft)!important;border:1px solid #C9A22766!important;color:var(--bp-black)!important}
+.sample-banner span,.tip-card b{color:var(--bp-red)!important}
+.sample-banner p,.tip-card p{color:var(--bp-slate)!important}
+.demo-main{background:var(--bp-cream);color:var(--bp-black)}
+.page-head h1{color:var(--bp-black)}
+.metric-grid article,.panel{background:var(--bp-white)!important;color:var(--bp-black)!important;border:1px solid var(--bp-line)!important;box-shadow:0 8px 24px #14141408}
+.metric-grid small,.metric-grid span,.booking-person small,.barber-info small,.panel-head p,.sub{color:var(--bp-slate)!important}
+.metric-grid b,.booking-time,.booking-person b,.barber-info b,.panel h2,.bill-total b{color:var(--bp-black)}
+.metric-grid .up,.online{color:var(--bp-green)!important}
+.metric-grid .waiting,.busy{color:var(--bp-amber)!important}
+.status.booked{background:#E8EEF8;color:#1D4ED8}
+.status.waiting{background:#FFF2D8;color:var(--bp-amber)}
+.status.in-service{background:#E7F4E9;color:var(--bp-green)}
+.status.completed{background:#E8F3EA;color:var(--bp-green)}
+.booking-card,.barber-row,.invoice-row,.service-row{border-color:var(--bp-line)!important}
+.avatar{background:#F1E6C8;color:var(--bp-black)}
+.avatar.alt{background:#E7EAF0;color:#374151}
+.avatar.warm{background:#F6E7D8;color:#7C2D12}
+.form-grid label,.bill-label{color:var(--bp-black)!important}
+.form-grid input,.form-grid select,.bill-label select,.search,.panel-head select{background:#fff!important;color:var(--bp-black)!important;border:1px solid #6B728066!important}
+.secondary{background:var(--bp-soft)!important;color:var(--bp-black)!important}
+.table-action{background:var(--bp-red)!important;color:#fff!important}
+.tag{color:var(--bp-red)!important;border-color:#B91C1C66}
+.bill-total{border-color:var(--bp-line);color:var(--bp-slate)}
+.bill-total .grand{color:var(--bp-red)!important}
+.inline-status{color:var(--bp-green)!important}
+.demo-footer{border-color:var(--bp-line);color:var(--bp-slate)}
+.demo-footer a{color:var(--bp-red)!important}
+@media(max-width:650px){.sidebar{background:var(--bp-black)!important}.nav-item{color:#fff}}
