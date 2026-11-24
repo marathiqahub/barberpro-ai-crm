@@ -1,3 +1,6 @@
+-- New rebooking reminder preferences are opt-in by default. Existing customer choices are preserved.
+ALTER TABLE shop_customer_rebooking_profiles ALTER COLUMN enabled SET DEFAULT FALSE;
+
 -- Isolated synthetic examples for the customer preferences and privacy UI.
 -- These rows are deliberately not users, customer profiles, message-consent rows or privacy-consent events.
 CREATE TABLE IF NOT EXISTS shop_demo_customer_profiles (

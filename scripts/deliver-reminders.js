@@ -36,10 +36,11 @@ async function queueRebookingAndReviewNudges(){
    SELECT DISTINCT ON (a.shop_id,a.customer_id) a.shop_id,a.customer_id,a.id appointment_id,a.starts_at,a.service_id
    FROM appointments a WHERE a.status='COMPLETED' ORDER BY a.shop_id,a.customer_id,a.starts_at DESC
   ), due AS (
-   SELECT lv.*,COALESCE(cp.preferred_interval_days,21) preferred_interval_days,sh.name shop_name,sv.name service_name
-   FROM last_visits lv LEFT JOIN shop_customer_profiles cp ON cp.shop_id=lv.shop_id AND cp.customer_id=lv.customer_id
+   SELECT lv.*,COALESCE(rp.interval_days,cp.preferred_interval_days,21) preferred_interval_days,sh.name shop_name,sv.name service_name
+   FROM last_visits lv JOIN shop_customer_rebooking_profiles rp ON rp.shop_id=lv.shop_id AND rp.customer_id=lv.customer_id AND rp.enabled=TRUE
+   LEFT JOIN shop_customer_profiles cp ON cp.shop_id=lv.shop_id AND cp.customer_id=lv.customer_id
    JOIN shops sh ON sh.id=lv.shop_id JOIN services sv ON sv.id=lv.service_id
-   WHERE lv.starts_at+make_interval(days=>COALESCE(cp.preferred_interval_days,21))<=NOW()
+   WHERE lv.starts_at+make_interval(days=>COALESCE(rp.interval_days,cp.preferred_interval_days,21))<=NOW()
      AND NOT EXISTS(SELECT 1 FROM appointments upcoming WHERE upcoming.shop_id=lv.shop_id AND upcoming.customer_id=lv.customer_id AND upcoming.status IN('BOOKED','CONFIRMED') AND upcoming.starts_at>NOW())
   )
   INSERT INTO shop_customer_reminders(shop_id,customer_id,appointment_id,channel,template_key,scheduled_at,dedupe_key)

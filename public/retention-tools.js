@@ -18,7 +18,7 @@ async function customerTools(){
  book.closest('.panel').after(host);
  let customerSettings={contact:{},consents:{}};
  const syncNoteInputs=()=>{const allowed=$('#bp-pref').elements.profileNotes.checked;$('#bp-pref').elements.skinNotes.disabled=!allowed;$('#bp-pref').elements.allergyNotes.disabled=!allowed};
- $('#bp-pref').elements.profileNotes.addEventListener('change',syncNoteInputs);
+ $('#bp-pref').elements.profileNotes.addEventListener('change',syncNoteInputs);syncNoteInputs();
  async function load(){
   const id=shop.value;
   try{
