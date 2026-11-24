@@ -9,7 +9,7 @@ function createOperationsRouter(pool, tokenService) {
   const frontDesk = [authenticate, requireRole('ADMIN', 'FRONT_DESK')];
   const admin = [authenticate, requireRole('ADMIN')];
   const asyncRoute = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-  const id = value => { const n=Number(value); return /^[1-9]\\d*$/.test(String(value)) && Number.isSafeInteger(n) ? n : null; };
+  const id = value => { const n=Number(value); return /^[1-9]\d*$/.test(String(value)) && Number.isSafeInteger(n) ? n : null; };
   const csv = value => '"' + String(value ?? '').replace(/"/g, '""') + '"';
   const financialYear = date => {
     const d = new Date(date + 'T00:00:00Z');
@@ -38,7 +38,7 @@ function createOperationsRouter(pool, tokenService) {
 
   router.post('/admin/front-desk-users', ...admin, asyncRoute(async(req,res)=>{
     const b=req.body||{},name=typeof b.name==='string'?b.name.trim():'',email=typeof b.email==='string'?b.email.trim().toLowerCase():'',shopId=id(b.shopId);
-    if(!shopId||!name||name.length>120||email.length>254||! /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) return res.status(400).json({error:'Provide a valid name, email and shopId.'});
+    if(!shopId||!name||name.length>120||email.length>254||! /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({error:'Provide a valid name, email and shopId.'});
     const client=await pool.connect();
     try{
       await client.query('BEGIN');
@@ -70,7 +70,7 @@ function createOperationsRouter(pool, tokenService) {
     const shopId=id(req.params.shopId), b=req.body || {};
     if (!shopId || typeof b.gstRegistered!=='boolean' ||
         (b.gstRegistered && (typeof b.gstin!=='string' || !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]$/.test(b.gstin.trim().toUpperCase()) ||
-         typeof b.stateCode!=='string' || !/^\\d{2}$/.test(b.stateCode))) ||
+         typeof b.stateCode!=='string' || !/^\d{2}$/.test(b.stateCode))) ||
         typeof (b.invoicePrefix ?? 'BP')!=='string' || !/^[A-Z0-9]{1,12}$/.test(b.invoicePrefix ?? 'BP')) {
       return res.status(400).json({error:'Provide valid GST registration details and an invoice prefix.'});
     }
@@ -90,7 +90,7 @@ function createOperationsRouter(pool, tokenService) {
     const shopId=id(req.params.shopId), b=req.body||{};
     if(!shopId || !await shopAccess(req.user,shopId)) return res.status(404).json({error:'Shop not found.'});
     if(typeof b.customerName!=='string' || !b.customerName.trim() || !Array.isArray(b.items) || !b.items.length || b.items.length>50 ||
-       !/^\\d{4}-\\d{2}-\\d{2}$/.test(b.issueDate||'') || (b.amountPaidPaise!==undefined && (!Number.isSafeInteger(b.amountPaidPaise)||b.amountPaidPaise<0))) {
+       !/^\d{4}-\d{2}-\d{2}$/.test(b.issueDate||'') || (b.amountPaidPaise!==undefined && (!Number.isSafeInteger(b.amountPaidPaise)||b.amountPaidPaise<0))) {
       return res.status(400).json({error:'Provide customerName, issueDate and 1–50 valid invoice items.'});
     }
     const client=await pool.connect();
@@ -102,7 +102,7 @@ function createOperationsRouter(pool, tokenService) {
       if(!shop.rowCount){await client.query('ROLLBACK');return res.status(404).json({error:'Active shop not found.'});}
       const profile=shop.rows[0], date=b.issueDate, fy=financialYear(date);
       const docType=profile.gst_registered?'TAX_INVOICE':'BILL_OF_SUPPLY';
-      const place=typeof b.placeOfSupplyStateCode==='string' && /^\\d{2}$/.test(b.placeOfSupplyStateCode)?b.placeOfSupplyStateCode:null;
+      const place=typeof b.placeOfSupplyStateCode==='string' && /^\d{2}$/.test(b.placeOfSupplyStateCode)?b.placeOfSupplyStateCode:null;
       if(profile.gst_registered && !place){await client.query('ROLLBACK');return res.status(400).json({error:'Place of supply state code is required for a GST tax invoice.'});}
       let subtotal=0,discount=0,taxable=0,cgst=0,sgst=0,igst=0;
       const lines=[];
@@ -166,7 +166,7 @@ function createOperationsRouter(pool, tokenService) {
 
   router.get('/shops/:shopId/gst-returns/export', ...admin, asyncRoute(async(req,res)=>{
     const shopId=id(req.params.shopId),from=req.query.from,to=req.query.to;
-    if(!shopId||!/^\\d{4}-\\d{2}-\\d{2}$/.test(from||'')||!/^\\d{4}-\\d{2}-\\d{2}$/.test(to||'')||from>to) return res.status(400).json({error:'Provide shopId and a valid date range.'});
+    if(!shopId||!/^\d{4}-\d{2}-\d{2}$/.test(from||'')||!/^\d{4}-\d{2}-\d{2}$/.test(to||'')||from>to) return res.status(400).json({error:'Provide shopId and a valid date range.'});
     const docs=await pool.query(
       `SELECT 'INVOICE' document_kind,i.invoice_number document_number,i.issue_date,i.document_type,i.customer_name,i.customer_gstin,i.place_of_supply_state_code,
        l.hsn_sac_code,l.description,l.quantity,l.tax_rate_bps,l.taxable_paise,l.cgst_paise,l.sgst_paise,l.igst_paise,l.total_paise
