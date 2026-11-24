@@ -103,8 +103,14 @@ function createCrmRouter(pool, tokenService) {
     if(!shopId)return res.status(400).json({error:'Invalid shop id.'});
     const result=await pool.query(
       `SELECT c.*,
-       (SELECT COUNT(*)::int FROM shop_customer_profiles p WHERE p.shop_id=c.shop_id AND
-        ((c.channel='EMAIL' AND p.marketing_email_consent=TRUE) OR (c.channel='SMS' AND p.marketing_sms_consent=TRUE))) eligible_consent_count
+       (SELECT COUNT(*)::int FROM shop_customer_profiles p
+        WHERE p.shop_id=c.shop_id
+          AND ((c.channel='EMAIL' AND p.marketing_email_consent=TRUE) OR (c.channel='SMS' AND p.marketing_sms_consent=TRUE))
+          AND (c.audience<>'NO_VISIT_30_DAYS' OR NOT EXISTS(
+            SELECT 1 FROM appointments a WHERE a.shop_id=p.shop_id AND a.customer_id=p.customer_id
+              AND a.status='COMPLETED' AND a.starts_at>=NOW()-INTERVAL '30 days'))
+          AND (c.audience<>'LOYALTY_MEMBERS' OR EXISTS(
+            SELECT 1 FROM shop_loyalty_accounts la WHERE la.shop_id=p.shop_id AND la.customer_id=p.customer_id AND la.balance_points>0))) eligible_consent_count
        FROM shop_marketing_campaigns c WHERE c.shop_id=$1 ORDER BY c.created_at DESC LIMIT 100`,[shopId]);
     res.json({campaigns:result.rows});
   }));
