@@ -186,3 +186,8 @@ Apply `db/migrations/026_consolidated_commercial_completion.sql` after migration
 
 Routes are ADMIN-only except the customer feedback submission route. Payroll reports are informational exports, not payroll calculations, statutory deductions, payslips or salary disbursement. Wallet and voucher balances are internal stored value; payment collection, refund and accounting treatment must be reconciled through the existing payment and invoice flows. WhatsApp delivery is not activated without a provider account, approved templates and a worker.
 
+
+
+## Messaging, payroll, AI booking and mobile
+
+The consolidated messaging/payroll/localization implementation is documented in [PAYROLL_AND_MESSAGING.md](PAYROLL_AND_MESSAGING.md). Android build and Play Console release prerequisites are documented in [ANDROID_RELEASE.md](ANDROID_RELEASE.md). The reminder worker is scheduled through the optional Render Cron service in `render.yaml`; the Cron service uses a paid Starter plan and requires provider credentials and a Render Blueprint sync. Statutory payroll rates must be configured and reviewed by a qualified Maharashtra payroll professional. Marathi translations are being expanded incrementally; review the full UI before treating localization as complete.
