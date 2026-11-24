@@ -12,6 +12,7 @@ const { createAiRouter } = require('./routes/aiRoutes');
 const { createOperationsRouter } = require('./routes/operationsRoutes');
 const { createMarketingRouter } = require('./routes/marketingRoutes');
 const { createCrmRouter } = require('./routes/crmRoutes');
+const { createInventoryRouter } = require('./routes/inventoryRoutes');
 const { loadAuthConfig } = require('./auth/config');
 const { createTokenService } = require('./auth/tokens');
 const { Pool } = require('pg');
@@ -68,6 +69,7 @@ app.use('/api', createDashboardRouter(pool, bookingTokens));
 app.use('/api', createAiRouter(pool, bookingTokens));
 app.use('/api', createOperationsRouter(pool, bookingTokens));
 app.use('/api', createCrmRouter(pool, bookingTokens));
+app.use('/api', createInventoryRouter(pool, bookingTokens));
 app.use('/api/payments', paymentRouter);
 app.use('/api/marketing', createMarketingRouter(pool, bookingTokens));
 
