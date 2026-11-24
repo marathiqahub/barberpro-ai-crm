@@ -1,6 +1,7 @@
 const express = require('express');
 const { createAuthMiddleware } = require('../auth/middleware');
 const { scheduleAppointmentReminders } = require('../messaging/reminders');
+const { offerWaitlistEntry } = require('./retentionRoutes');
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const ID_RE = /^[1-9]\d*$/;
@@ -331,12 +332,15 @@ function createBookingRouter(pool, tokenService) {
        WHERE id = $1 AND status IN ('BOOKED','CONFIRMED')
          AND starts_at > NOW()
          AND (customer_id = $2 OR $3 = 'ADMIN')
-       RETURNING id, status, starts_at, ends_at`,
+       RETURNING id, shop_id, status, starts_at, ends_at`,
       [appointmentId, req.user.id, req.user.role]
     );
     if (!result.rowCount) return res.status(404).json({ error: 'Upcoming appointment not found or cannot be cancelled.' });
     try{await pool.query("UPDATE shop_customer_reminders SET status='CANCELLED',processing_at=NULL WHERE appointment_id=$1 AND status IN ('PENDING','PROCESSING')",[appointmentId]);}catch(error){if(error.code!=='42P01')throw error;}
-    res.json({ appointment: result.rows[0] });
+    let waitlistOffer = null;
+    try { waitlistOffer = await offerWaitlistEntry(pool, result.rows[0].shop_id, null, appointmentId); }
+    catch (error) { console.error('Waitlist auto-fill failed after cancellation', appointmentId, error.message); }
+    res.json({ appointment: result.rows[0], waitlistOfferQueued: Boolean(waitlistOffer) });
   }));
 
   return router;
