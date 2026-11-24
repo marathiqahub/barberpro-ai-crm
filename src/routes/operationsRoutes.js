@@ -449,7 +449,7 @@ function createOperationsRouter(pool, tokenService) {
     try{
       await client.query('BEGIN');
       const context=await client.query(
-        `SELECT st.id staff_id,sv.id service_id,sv.duration_minutes
+        `SELECT st.id staff_id,sv.id service_id,sv.duration_minutes,sv.cleanup_minutes
          FROM shop_staff st JOIN services sv ON sv.shop_id=st.shop_id
          JOIN users u ON u.id=$4 AND u.role='CUSTOMER' AND u.is_active=TRUE
          WHERE st.id=$2 AND sv.id=$3 AND st.shop_id=$1 AND st.is_active=TRUE AND sv.is_active=TRUE
@@ -458,15 +458,16 @@ function createOperationsRouter(pool, tokenService) {
          FOR UPDATE OF st`,
         [shopId,staffId,serviceId,customerId]);
       if(!context.rowCount){await client.query('ROLLBACK');return res.status(400).json({error:'Customer, service or barber is not active for this shop.'});}
-      const endsAt=new Date(startsAt.getTime()+Number(context.rows[0].duration_minutes)*60000);
+      const endsAt=new Date(startsAt.getTime()+Number(context.rows[0].duration_minutes)*60000),bufferEndsAt=new Date(endsAt.getTime()+Number(context.rows[0].cleanup_minutes||0)*60000);
       const working=await client.query(
         `SELECT 1 FROM staff_working_hours wh JOIN shop_staff st ON st.id=wh.staff_id
          JOIN shops sh ON sh.id=st.shop_id
-         WHERE wh.staff_id=$1 AND wh.is_active=TRUE
+         LEFT JOIN shop_staff_shift_overrides ov ON ov.staff_id=st.id AND ov.work_date=($2::timestamptz AT TIME ZONE sh.timezone)::date
+         WHERE wh.staff_id=$1 AND COALESCE(ov.is_working_day,wh.is_active)=TRUE
            AND wh.day_of_week=EXTRACT(DOW FROM ($2::timestamptz AT TIME ZONE sh.timezone))::int
-           AND ($2::timestamptz AT TIME ZONE sh.timezone)::time>=wh.opens_at
-           AND ($3::timestamptz AT TIME ZONE sh.timezone)::time<=wh.closes_at`,
-        [staffId,startsAt.toISOString(),endsAt.toISOString()]);
+           AND ($2::timestamptz AT TIME ZONE sh.timezone)::time>=COALESCE(ov.opens_at,wh.opens_at)
+           AND ($3::timestamptz AT TIME ZONE sh.timezone)::time<=COALESCE(ov.closes_at,wh.closes_at)`,
+        [staffId,startsAt.toISOString(),bufferEndsAt.toISOString()]);
       if(!working.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'Barber is outside their working hours.'});}
       const off=await client.query(
         'SELECT 1 FROM staff_time_off WHERE staff_id=$1 AND tstzrange(starts_at,ends_at,\'[)\') && tstzrange($2::timestamptz,$3::timestamptz,\'[)\')',
