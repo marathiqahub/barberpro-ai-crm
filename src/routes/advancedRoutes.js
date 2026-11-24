@@ -16,6 +16,12 @@ function createAdvancedRouter(pool,tokenService){
  const hmac=(secret,value)=>crypto.createHmac('sha256',secret).update(value).digest('hex');
  const safeEqual=(a,b)=>{const x=Buffer.from(String(a||''),'hex'),y=Buffer.from(String(b||''),'hex');return x.length===y.length&&x.length>0&&crypto.timingSafeEqual(x,y);};
  async function shopAccess(user,shopId){if(user.role==='ADMIN')return true;const q=await pool.query('SELECT 1 FROM shop_staff WHERE shop_id=$1 AND user_id=$2 AND is_active=TRUE',[shopId,user.id]);return q.rowCount>0;}
+ async function featureEnabled(shopId,feature){
+  const sub=await pool.query(`SELECT p.feature_entitlements FROM shop_subscriptions ss JOIN barberpro_subscription_plans p ON p.id=ss.plan_id
+   WHERE ss.shop_id=$1 AND ss.status IN('ACTIVE','AUTHENTICATED') ORDER BY ss.created_at DESC LIMIT 1`,[shopId]);
+  if(!sub.rowCount)return true; // Existing shops remain in legacy/trial mode until subscription activation.
+  return sub.rows[0].feature_entitlements?.[feature]===true;
+ }
  async function barberStaff(user,staffId){const q=await pool.query('SELECT id,shop_id,display_name FROM shop_staff WHERE id=$1 AND user_id=$2 AND is_active=TRUE',[staffId,user.id]);return q.rows[0]||null;}
  async function razorpay(path,method,body){const key=process.env.RAZORPAY_KEY_ID,secret=process.env.RAZORPAY_KEY_SECRET;if(!key||!secret)throw Object.assign(new Error('Razorpay credentials are not configured.'),{status:503});const response=await fetch('https://api.razorpay.com/v1'+path,{method,headers:{Authorization:'Basic '+Buffer.from(key+':'+secret).toString('base64'),'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});const data=await response.json().catch(()=>({}));if(!response.ok)throw Object.assign(new Error(data.error?.description||'Razorpay request failed.'),{status:502});return data;}
 
@@ -64,6 +70,7 @@ function createAdvancedRouter(pool,tokenService){
   if(!bytes.length||bytes.length>524288)return s.status(413).json({error:'Reference photos must be 512 KB or smaller.'});
   const a=await pool.query(`SELECT id,shop_id,customer_id,status FROM appointments WHERE id=$1 AND customer_id=$2 AND status IN('BOOKED','CONFIRMED')`,[appointmentId,q.user.id]);
   if(!a.rowCount)return s.status(404).json({error:'Upcoming appointment not found.'});
+  if(!await featureEnabled(a.rows[0].shop_id,'REFERENCE_PHOTOS'))return s.status(403).json({error:'Reference photos are not included in this shop subscription.'});
   await pool.query('DELETE FROM shop_appointment_reference_photos WHERE appointment_id=$1',[appointmentId]);
   const saved=await pool.query(`INSERT INTO shop_appointment_reference_photos(appointment_id,shop_id,customer_id,content_type,image_bytes,consent_version)
     VALUES($1,$2,$3,$4,$5,'booking-reference-v1') RETURNING id,retention_until,uploaded_at`,[appointmentId,a.rows[0].shop_id,q.user.id,type,bytes]);
@@ -88,6 +95,7 @@ function createAdvancedRouter(pool,tokenService){
   const a=await pool.query(`SELECT a.id,a.shop_id,a.customer_id,a.service_id,sv.chemical_consent_required,a.status
     FROM appointments a JOIN services sv ON sv.id=a.service_id WHERE a.id=$1 AND a.customer_id=$2`,[appointmentId,q.user.id]);
   if(!a.rowCount||!a.rows[0].chemical_consent_required||!['BOOKED','CONFIRMED'].includes(a.rows[0].status))return s.status(404).json({error:'A matching upcoming chemical-service appointment was not found.'});
+  if(!await featureEnabled(a.rows[0].shop_id,'CHEMICAL_CONSENT'))return s.status(403).json({error:'Digital chemical consent is not included in this shop subscription.'});
   const saved=await pool.query(`INSERT INTO shop_chemical_service_consents(appointment_id,shop_id,customer_id,service_id,answers,signature_name,notice_version,signer_ip)
     VALUES($1,$2,$3,$4,$5::jsonb,$6,'chemical-consent-v1',$7::inet)
     ON CONFLICT(appointment_id,customer_id) DO UPDATE SET answers=EXCLUDED.answers,signature_name=EXCLUDED.signature_name,notice_version=EXCLUDED.notice_version,signed_at=NOW(),signer_ip=EXCLUDED.signer_ip
@@ -110,7 +118,8 @@ function createAdvancedRouter(pool,tokenService){
    FROM appointments a JOIN shop_staff st ON st.id=a.staff_id JOIN users u ON u.id=a.customer_id
    WHERE a.id=$1 AND st.user_id=$2`,[appointmentId,q.user.id]);
   if(!found.rowCount||found.rows[0].status!=='COMPLETED')return s.status(404).json({error:'Completed appointment assigned to you was not found.'});
-  const a=found.rows[0],link=await razorpay('/payment_links','POST',{amount,currency:'INR',accept_partial:false,description:'BarberPro tip for appointment #'+appointmentId,customer:{name:a.name,email:a.email,contact:a.phone||undefined},notify:{sms:false,email:false},reminder_enable:false,reference_id:'tip_'+appointmentId+'_'+Date.now(),notes:{appointmentId:String(appointmentId),shopId:String(a.shop_id),barberStaffId:String(a.staff_id),customerId:String(a.customer_id),type:'BARBER_TIP'}});
+  const a=found.rows[0];if(!await featureEnabled(a.shop_id,'TIPS'))return s.status(403).json({error:'Digital tip links are not included in this shop subscription.'});
+  const link=await razorpay('/payment_links','POST',{amount,currency:'INR',accept_partial:false,description:'BarberPro tip for appointment #'+appointmentId,customer:{name:a.name,email:a.email,contact:a.phone||undefined},notify:{sms:false,email:false},reminder_enable:false,reference_id:'tip_'+appointmentId+'_'+Date.now(),notes:{appointmentId:String(appointmentId),shopId:String(a.shop_id),barberStaffId:String(a.staff_id),customerId:String(a.customer_id),type:'BARBER_TIP'}});
   const saved=await pool.query(`INSERT INTO shop_barber_tips(shop_id,appointment_id,customer_id,staff_id,amount_paise,razorpay_payment_link_id,short_url,created_by)
    VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,amount_paise,short_url,status,created_at`,[a.shop_id,appointmentId,a.customer_id,a.staff_id,amount,link.id,link.short_url,q.user.id]);
   s.status(201).json({tip:saved.rows[0],paymentLink:link.short_url,provider:'RAZORPAY',message:'Share this payment link with the customer. Payment is confirmed only by the Razorpay webhook.'});
@@ -128,6 +137,7 @@ function createAdvancedRouter(pool,tokenService){
   const staffId=id(q.body?.staffId),targetId=q.body?.targetStaffId? id(q.body.targetStaffId):null,type=q.body?.requestType,workDate=q.body?.workDate,reason=String(q.body?.reason||'').slice(0,500);
   if(!staffId||!['TIME_OFF','SWAP'].includes(type)||!validDate(workDate)||(type==='SWAP'&&!targetId)||(type==='TIME_OFF'&&targetId))return s.status(400).json({error:'Provide staffId, requestType, workDate and a targetStaffId only for swaps.'});
   const staff=await barberStaff(q.user,staffId);if(!staff)return s.sendStatus(404);
+  if(!await featureEnabled(staff.shop_id,'WORKFORCE'))return s.status(403).json({error:'Shift management is not included in this shop subscription.'});
   if(targetId){const target=await pool.query('SELECT id FROM shop_staff WHERE id=$1 AND shop_id=$2 AND is_active=TRUE',[targetId,staff.shop_id]);if(!target.rowCount)return s.status(400).json({error:'Target barber must be active in the same shop.'});}
   const start=workDate+'T00:00:00+05:30',end=new Date(new Date(start).getTime()+86400000).toISOString();
   const out=await pool.query(`INSERT INTO shop_staff_shift_requests(shop_id,staff_id,request_type,target_staff_id,starts_at,ends_at,reason)
@@ -191,6 +201,7 @@ function createAdvancedRouter(pool,tokenService){
  r.get('/admin/shops/:shopId/accounting-export.csv',...admin,wrap(async(q,s)=>{
   const shopId=id(q.params.shopId),from=q.query.from,to=q.query.to;
   if(!shopId||!validDate(from)||!validDate(to)||from>to||(new Date(to)-new Date(from))/86400000>366)return s.status(400).json({error:'Provide shopId and a valid date range of at most one year.'});
+  if(!await featureEnabled(shopId,'ACCOUNTING_EXPORT'))return s.status(403).json({error:'Accounting export is not included in this shop subscription.'});
   const invoices=await pool.query(`SELECT i.invoice_number,i.issue_date,i.document_type,i.customer_name,i.subtotal_paise,i.discount_paise,i.taxable_paise,i.cgst_paise,i.sgst_paise,i.igst_paise,i.total_paise,
    COALESCE((SELECT string_agg(p.method||':'||(p.amount_paise::text),';' ORDER BY p.method) FROM sales_invoice_payments p WHERE p.invoice_id=i.id),'UNPAID') payment_allocations
    FROM sales_invoices i WHERE i.shop_id=$1 AND i.issue_date BETWEEN $2::date AND $3::date AND i.status='ISSUED' ORDER BY i.issue_date,i.invoice_number`,[shopId,from,to]);
@@ -204,6 +215,7 @@ function createAdvancedRouter(pool,tokenService){
  r.post('/admin/shops/:shopId/customers/import',...admin,wrap(async(q,s)=>{
   const shopId=id(q.params.shopId),file=q.body?.fileBase64,filename=String(q.body?.filename||'customers.csv');
   if(!shopId||typeof file!=='string'||file.length>4*1024*1024||!await shopAccess(q.user,shopId))return s.status(400).json({error:'Provide an authorized shop and a CSV/XLSX file up to 3 MB.'});
+  if(!await featureEnabled(shopId,'CUSTOMER_IMPORT'))return s.status(403).json({error:'Bulk customer import is not included in this shop subscription.'});
   const bytes=Buffer.from(file,'base64');let rows;
   if(/\.csv$/i.test(filename))rows=parseCsv(bytes.toString('utf8').replace(/^\uFEFF/,''));
   else if(/\.xlsx$/i.test(filename)){
