@@ -1,6 +1,7 @@
 const express=require('express');
 const crypto=require('node:crypto');
 const {createAuthMiddleware}=require('../auth/middleware');
+const {applyStock,receivedStatus}=require('../inventory/rules');
 function createInventoryRouter(pool,tokenService){
  const router=express.Router(),{authenticate,requireRole}=createAuthMiddleware(pool,tokenService),admin=[authenticate,requireRole('ADMIN')];
  const asyncRoute=fn=>(req,res,next)=>Promise.resolve(fn(req,res,next)).catch(next);
@@ -54,8 +55,8 @@ function createInventoryRouter(pool,tokenService){
    await client.query('BEGIN');
    const item=await client.query('SELECT quantity,unit_cost_paise FROM shop_inventory_items WHERE id=$1 AND shop_id=$2 AND is_active=TRUE FOR UPDATE',[itemId,shopId]);
    if(!item.rowCount){await client.query('ROLLBACK');return res.status(404).json({error:'Active inventory item not found.'});}
-   const next=Number(item.rows[0].quantity)+delta;
-   if(next<0){await client.query('ROLLBACK');return res.status(400).json({error:'Stock cannot become negative.'});}
+   let next;
+   try{next=applyStock(Number(item.rows[0].quantity),delta);}catch(error){await client.query('ROLLBACK');return res.status(400).json({error:error.message});}
    await client.query('UPDATE shop_inventory_items SET quantity=$3,updated_at=NOW() WHERE id=$1 AND shop_id=$2',[itemId,shopId,next]);
    const movement=await client.query(`INSERT INTO shop_stock_movements(shop_id,item_id,movement_type,quantity_delta,unit_cost_paise,note,created_by)
     VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
@@ -107,9 +108,8 @@ function createInventoryRouter(pool,tokenService){
      VALUES($1,$2,'PURCHASE',$3,$4,$5,'Purchase order receipt',$6)`,
      [shopId,x.item_id,entry.quantity,x.unit_cost_paise,po.rows[0].order_number,req.user.id]);
    }
-   const state=await client.query(`SELECT BOOL_AND(received_quantity=ordered_quantity) complete,
-    BOOL_OR(received_quantity>0) partial FROM shop_purchase_order_lines WHERE purchase_order_id=$1`,[orderId]);
-   const status=state.rows[0].complete?'RECEIVED':state.rows[0].partial?'PART_RECEIVED':'ORDERED';
+   const state=await client.query('SELECT ordered_quantity,received_quantity FROM shop_purchase_order_lines WHERE purchase_order_id=$1',[orderId]);
+   const status=receivedStatus(state.rows.map(x=>({ordered:Number(x.ordered_quantity),received:Number(x.received_quantity)})));
    await client.query('UPDATE shop_purchase_orders SET status=$2,updated_at=NOW() WHERE id=$1',[orderId,status]);
    await client.query('COMMIT');res.json({purchaseOrderId:orderId,status});
   }catch(e){await client.query('ROLLBACK');throw e;}finally{client.release();}
