@@ -197,3 +197,23 @@ END $body$;
 DROP TRIGGER IF EXISTS appointments_require_chemical_consent ON appointments;
 CREATE TRIGGER appointments_require_chemical_consent BEFORE UPDATE OF status ON appointments
   FOR EACH ROW EXECUTE FUNCTION require_chemical_service_consent();
+
+CREATE TABLE IF NOT EXISTS shop_message_template_translations (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  shop_id BIGINT NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
+  channel VARCHAR(12) NOT NULL CHECK(channel IN ('EMAIL','SMS','WHATSAPP')),
+  template_key VARCHAR(40) NOT NULL,
+  locale VARCHAR(2) NOT NULL CHECK(locale IN ('en','hi','mr')),
+  subject VARCHAR(180),
+  body TEXT NOT NULL,
+  provider_template_name VARCHAR(100),
+  provider_template_language VARCHAR(16) NOT NULL,
+  provider_template_status VARCHAR(12) NOT NULL DEFAULT 'PENDING'
+    CHECK(provider_template_status IN ('PENDING','APPROVED','REJECTED')),
+  provider_approval_reference VARCHAR(120),
+  updated_by BIGINT REFERENCES users(id) ON DELETE SET NULL,
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE(shop_id,channel,template_key,locale)
+);
+CREATE INDEX IF NOT EXISTS message_template_translation_lookup_idx
+  ON shop_message_template_translations(shop_id,channel,template_key,locale);
