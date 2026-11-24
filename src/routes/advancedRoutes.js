@@ -75,6 +75,10 @@ function createAdvancedRouter(pool,tokenService){
   if(!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded))return s.status(400).json({error:'Reference photo is not valid base64 data.'});
   const bytes=Buffer.from(encoded,'base64');
   if(!bytes.length||bytes.length>524288)return s.status(413).json({error:'Reference photos must be 512 KB or smaller.'});
+  const validImage=type==='image/jpeg'?bytes[0]===0xff&&bytes[1]===0xd8&&bytes[2]===0xff:
+   type==='image/png'?bytes.subarray(0,8).equals(Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a])):
+   bytes.toString('ascii',0,4)==='RIFF'&&bytes.toString('ascii',8,12)==='WEBP';
+  if(!validImage)return s.status(400).json({error:'Image bytes do not match the selected content type.'});
   const a=await pool.query(`SELECT id,shop_id,customer_id,status FROM appointments WHERE id=$1 AND customer_id=$2 AND status IN('BOOKED','CONFIRMED')`,[appointmentId,q.user.id]);
   if(!a.rowCount)return s.status(404).json({error:'Upcoming appointment not found.'});
   if(!await featureEnabled(a.rows[0].shop_id,'REFERENCE_PHOTOS'))return s.status(403).json({error:'Reference photos are not included in this shop subscription.'});
