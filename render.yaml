@@ -50,6 +50,10 @@ services:
         sync: false
       - key: TWILIO_SMS_FROM
         sync: false
+      - key: TWILIO_SMS_DLT_ENTITY_ID
+        sync: false
+      - key: TWILIO_SMS_DLT_TEMPLATE_ID
+        sync: false
       - key: TWILIO_WHATSAPP_FROM
         sync: false
       - key: META_WHATSAPP_TOKEN
@@ -57,6 +61,8 @@ services:
       - key: META_WHATSAPP_VERIFY_TOKEN
         sync: false
       - key: META_APP_SECRET
+        sync: false
+      - key: PRIVATE_MEDIA_HOSTS
         sync: false
   - type: cron
     name: barberpro-reminder-delivery

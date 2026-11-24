@@ -87,6 +87,7 @@ async function run(){
  for(const row of rows){
   let destination=row.channel==='EMAIL'?row.email:row.phone;
   try{
+   if(row.channel==='SMS'&&(!process.env.TWILIO_SMS_DLT_ENTITY_ID||!process.env.TWILIO_SMS_DLT_TEMPLATE_ID)){await pool.query("UPDATE shop_customer_reminders SET status='PENDING',processing_at=NULL WHERE id=$1",[row.id]);continue;}
    if(!row.enabled_channels?.includes(row.channel))throw Object.assign(new Error('This channel is not enabled for the shop'),{code:'CHANNEL_DISABLED'});
    if(row.channel!=='EMAIL'&&!row.phone_verified_at)throw Object.assign(new Error('Customer phone number is not verified'),{code:'PHONE_NOT_VERIFIED'});
    if(!destination)throw Object.assign(new Error('Customer has no destination for this channel'),{code:'NO_DESTINATION'});
@@ -103,6 +104,7 @@ async function run(){
    const variables=templateValue==null?{}:{'1':String(templateValue),'2':String(secondValue),'3':String(row.shop_name||'')};
    const sent=await deliver(row.channel,destination,{subject:row.subject,body,variables},process.env,global.fetch,{provider:row.whatsapp_provider,phoneNumberId:row.whatsapp_phone_number_id,from:row.channel==='SMS'?row.sms_from:row.channel==='EMAIL'?row.sender_email:null,templateName:row.provider_template_name,language:row.provider_template_language||'en_US'});
    await pool.query("UPDATE shop_customer_reminders SET status='SENT',sent_at=NOW(),processing_at=NULL,provider_reference=$2 WHERE id=$1",[row.id,sent.reference]);
+   if(row.related_entity_type==='REVIEW_REQUEST')await pool.query("UPDATE shop_review_requests SET status='SENT' WHERE id=$1",[row.related_entity_id]);
    await pool.query("INSERT INTO shop_message_delivery_attempts(reminder_id,shop_id,channel,destination,provider,status,provider_reference) VALUES($1,$2,$3,$4,$5,'SENT',$6)",[row.id,row.shop_id,row.channel,destination,sent.provider,sent.reference]);
   }catch(e){
    const code=String(e.code||'DELIVERY_FAILED'),attempts=Number(row.attempt_count||0)+1;

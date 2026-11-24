@@ -136,12 +136,19 @@ function createPaymentRouter(pool, tokenService) {
         const entity = event.payload?.payment?.entity;
         if (entity?.order_id) {
           const status = event.event === 'payment.captured' ? 'CAPTURED' : event.event === 'payment.authorized' ? 'AUTHORIZED' : event.event === 'payment.failed' ? 'FAILED' : null;
-          if (status) await client.query(
+          if (status) {
+            await client.query(
+            `UPDATE appointment_extra_payments SET status=CASE WHEN $1='CAPTURED' THEN 'PAID' WHEN $1='FAILED' THEN 'FAILED' ELSE 'AUTHORIZED' END,
+              provider_payment_id=COALESCE($2,provider_payment_id),provider_payload=provider_payload || $3::jsonb,updated_at=NOW()
+              WHERE provider_order_id=$4 AND status NOT IN ('PAID','REFUNDED','WAIVED')`,
+            [status,entity.id||null,JSON.stringify({webhookEvent:event.event}),entity.order_id]);
+            await client.query(
             `UPDATE payments SET status=CASE WHEN status IN ('CAPTURED','REFUNDED','PARTIALLY_REFUNDED') THEN status
                WHEN $1='CAPTURED' THEN 'CAPTURED' ELSE $1 END,
              provider_payment_id=COALESCE($2,provider_payment_id),
              provider_payload=provider_payload || $3::jsonb, updated_at=NOW() WHERE provider_order_id=$4`,
             [status, entity.id || null, JSON.stringify({ webhookEvent: event.event }), entity.order_id]);
+          }
         }
         const refund = event.payload?.refund?.entity;
         if (refund?.id) {
