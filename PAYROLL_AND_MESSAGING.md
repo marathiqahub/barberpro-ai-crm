@@ -17,6 +17,7 @@ The reminder delivery worker is `npm run reminders:deliver`; schedule it as a Re
 
 Configure Render secrets:
 - Email: `RESEND_API_KEY`, `MAIL_FROM`
+- Phone verification: `TWILIO_VERIFY_SERVICE_SID` (required before enabling SMS/WhatsApp on a customer profile)
 - SMS: `TWILIO_ACCOUNT_SID`, `TWILIO_AUTH_TOKEN`, `TWILIO_SMS_FROM`
 - WhatsApp Meta: `META_WHATSAPP_TOKEN`, `META_WHATSAPP_VERIFY_TOKEN`, `META_APP_SECRET`
 - Optional Twilio WhatsApp: `TWILIO_WHATSAPP_FROM`
