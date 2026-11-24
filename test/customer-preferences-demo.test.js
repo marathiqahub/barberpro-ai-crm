@@ -4,7 +4,7 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
 const root=path.join(__dirname,'..');
-const migration=fs.readFileSync(path.join(root,'db/migrations/032_customer_preferences_demo_profiles.sql'),'utf8');
+const migration=fs.readFileSync(path.join(root,'db/migrations/033_customer_preferences_demo_profiles.sql'),'utf8');
 const routes=fs.readFileSync(path.join(root,'src/routes/retentionRoutes.js'),'utf8');
 const ui=fs.readFileSync(path.join(root,'public/retention-tools.js'),'utf8');
 
