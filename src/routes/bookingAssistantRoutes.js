@@ -2,6 +2,7 @@
 const express=require('express');
 const rateLimit=require('express-rate-limit');
 const {createAuthMiddleware}=require('../auth/middleware');
+const {scheduleAppointmentReminders}=require('../messaging/reminders');
 function createBookingAssistantRouter(pool,tokens){
  const r=express.Router(),{authenticate,requireRole}=createAuthMiddleware(pool,tokens),customer=[authenticate,requireRole('CUSTOMER')];
  const limit=rateLimit({windowMs:60000,limit:20,standardHeaders:'draft-7',legacyHeaders:false});
@@ -18,7 +19,7 @@ function createBookingAssistantRouter(pool,tokens){
  AND EXISTS(SELECT 1 FROM staff_working_hours wh WHERE wh.staff_id=st.id AND wh.day_of_week=EXTRACT(DOW FROM ($5 AT TIME ZONE sh.timezone))::int AND wh.is_active=TRUE AND ($5 AT TIME ZONE sh.timezone)::time>=wh.opens_at AND (($5 AT TIME ZONE sh.timezone)::time+make_interval(mins=>sv.duration_minutes))<=wh.closes_at)
  AND NOT EXISTS(SELECT 1 FROM staff_time_off t WHERE t.staff_id=st.id AND tstzrange(t.starts_at,t.ends_at,'[)')&&tstzrange($5,$5+make_interval(mins=>sv.duration_minutes),'[)'))
  RETURNING id,shop_id,staff_id,service_id,starts_at,ends_at,status`,[shop,service,staff,q.user.id,start.toISOString()]);
- if(!out.rowCount)return s.status(409).json({error:'The selected barber or service is unavailable. Refresh availability and try again.'});s.status(201).json({appointment:out.rows[0],message:'Booking request created. The shop can confirm it in BarberPro.'});
+ if(!out.rowCount)return s.status(409).json({error:'The selected barber or service is unavailable. Refresh availability and try again.'});await scheduleAppointmentReminders(pool,{...out.rows[0],customer_id:q.user.id});s.status(201).json({appointment:out.rows[0],message:'Booking request created. The shop can confirm it in BarberPro.'});
  }catch(e){if(e.code==='23P01')return s.status(409).json({error:'That time was just booked. Please choose another slot.'});n(e)}});
  return r;
 }
