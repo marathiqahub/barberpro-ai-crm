@@ -45,7 +45,7 @@ test('Meta WhatsApp templates receive the configured locale and reference parame
  await deliver('WHATSAPP','919999999999',{body:'Reminder',variables:{'1':'41','2':'1 Dec 2026, 10:00 am','3':'BranchOne'}},{
   META_WHATSAPP_TOKEN:'token'
  },async(url,options)=>{sent=JSON.parse(options.body);return {ok:true,json:async()=>({messages:[{id:'wamid.1'}]})}},
- {templateName:'appointment_reminder_24h',phoneNumberId:'123',language:'hi'});
+ {templateName:'appointment_reminder_24h',phoneNumberId:'123',language:'hi',templateStatus:'APPROVED'});
  assert.equal(sent.template.language.code,'hi');
  assert.equal(sent.template.components[0].parameters[0].text,'41');
  assert.equal(sent.template.components[0].parameters[1].text,'1 Dec 2026, 10:00 am');
