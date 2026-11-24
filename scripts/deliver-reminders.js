@@ -44,7 +44,7 @@ async function queueRebookingAndReviewNudges(){
   )
   INSERT INTO shop_customer_reminders(shop_id,customer_id,appointment_id,channel,template_key,scheduled_at,dedupe_key)
   SELECT d.shop_id,d.customer_id,d.appointment_id,c.channel,'REBOOKING_NUDGE',NOW(),
-    'rebook:'||d.shop_id||':'||d.customer_id||':'||d.appointment_id||':'||c.channel
+    'rebook:'||d.shop_id::text||':'||d.customer_id::text||':'||d.appointment_id::text||':'||c.channel
   FROM due d JOIN shop_message_consents c ON c.shop_id=d.shop_id AND c.customer_id=d.customer_id
   JOIN shop_messaging_settings m ON m.shop_id=d.shop_id AND c.channel=ANY(m.enabled_channels)
   JOIN shop_message_templates t ON t.shop_id=d.shop_id AND t.channel=c.channel AND t.template_key='REBOOKING_NUDGE' AND t.is_active=TRUE
