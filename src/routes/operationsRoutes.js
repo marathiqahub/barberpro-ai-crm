@@ -183,6 +183,102 @@ function createOperationsRouter(pool, tokenService) {
     res.set('Content-Type','text/csv; charset=utf-8');res.set('Content-Disposition',`attachment; filename="barberpro-gst-sales-register-${from}-to-${to}.csv"`);
     res.send('\uFEFF'+lines.map(row=>row.map(csv).join(',')).join('\\r\\n'));
   }));
+
+  // Phase 1: shop-scoped front-desk calendar and walk-in operations.
+  const frontDeskRoles = [authenticate, requireRole('ADMIN', 'FRONT_DESK')];
+  const validDate = value => typeof value === 'string' && /^\\d{4}-\\d{2}-\\d{2}$/.test(value) &&
+    !Number.isNaN(Date.parse(value + 'T00:00:00Z')) &&
+    new Date(value + 'T00:00:00Z').toISOString().slice(0,10) === value;
+
+  router.get('/front-desk/appointments', ...frontDeskRoles, asyncRoute(async(req,res)=>{
+    const shopId=id(req.query.shopId), from=req.query.from, to=req.query.to;
+    if(!shopId || !validDate(from) || !validDate(to) || from>to ||
+       (new Date(to+'T00:00:00Z')-new Date(from+'T00:00:00Z'))/86400000>31)
+      return res.status(400).json({error:'Provide shopId and a valid date range of at most 32 calendar days.'});
+    if(!await shopAccess(req.user,shopId)) return res.status(404).json({error:'Shop not found.'});
+    const result=await pool.query(
+      `SELECT a.id,a.shop_id,a.staff_id,st.display_name staff_name,a.service_id,sv.name service_name,
+              sv.duration_minutes,a.customer_id,u.name customer_name,u.email customer_email,
+              a.starts_at,a.ends_at,a.status,a.customer_notes,a.created_at
+       FROM appointments a JOIN shop_staff st ON st.id=a.staff_id
+       JOIN services sv ON sv.id=a.service_id JOIN users u ON u.id=a.customer_id
+       WHERE a.shop_id=$1 AND (a.starts_at AT TIME ZONE (SELECT timezone FROM shops WHERE id=$1))::date BETWEEN $2::date AND $3::date
+       ORDER BY a.starts_at,st.display_name`,
+      [shopId,from,to]);
+    res.json({shopId,from,to,appointments:result.rows});
+  }));
+
+  router.post('/front-desk/walk-ins', ...frontDeskRoles, asyncRoute(async(req,res)=>{
+    const b=req.body||{},shopId=id(b.shopId),staffId=id(b.staffId),serviceId=id(b.serviceId),customerId=id(b.customerId);
+    const startsAt=typeof b.startsAt==='string'?new Date(b.startsAt):null;
+    if(!shopId||!staffId||!serviceId||!customerId||!startsAt||Number.isNaN(startsAt.getTime())||
+       startsAt.getTime()<Date.now()-5*60*1000||startsAt.getTime()>Date.now()+86400000||
+       (b.customerNotes!==undefined&&(typeof b.customerNotes!=='string'||b.customerNotes.length>1000)))
+      return res.status(400).json({error:'Provide valid shop, staff, service, customer and a walk-in start time within the next 24 hours.'});
+    if(!await shopAccess(req.user,shopId)) return res.status(404).json({error:'Shop not found.'});
+    const client=await pool.connect();
+    try{
+      await client.query('BEGIN');
+      const context=await client.query(
+        `SELECT st.id staff_id,sv.id service_id,sv.duration_minutes
+         FROM shop_staff st JOIN services sv ON sv.shop_id=st.shop_id
+         JOIN users u ON u.id=$4 AND u.role='CUSTOMER' AND u.is_active=TRUE
+         WHERE st.id=$2 AND sv.id=$3 AND st.shop_id=$1 AND st.is_active=TRUE AND sv.is_active=TRUE
+           AND (NOT EXISTS(SELECT 1 FROM staff_services ss WHERE ss.staff_id=st.id)
+                OR EXISTS(SELECT 1 FROM staff_services ss WHERE ss.staff_id=st.id AND ss.service_id=sv.id))
+         FOR UPDATE OF st`,
+        [shopId,staffId,serviceId,customerId]);
+      if(!context.rowCount){await client.query('ROLLBACK');return res.status(400).json({error:'Customer, service or barber is not active for this shop.'});}
+      const endsAt=new Date(startsAt.getTime()+Number(context.rows[0].duration_minutes)*60000);
+      const off=await client.query(
+        'SELECT 1 FROM staff_time_off WHERE staff_id=$1 AND tstzrange(starts_at,ends_at,\'[)\') && tstzrange($2::timestamptz,$3::timestamptz,\'[)\')',
+        [staffId,startsAt.toISOString(),endsAt.toISOString()]);
+      if(off.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'Barber is unavailable during this time.'});}
+      const inserted=await client.query(
+        `INSERT INTO appointments(shop_id,staff_id,service_id,customer_id,starts_at,ends_at,status,customer_notes)
+         VALUES($1,$2,$3,$4,$5,$6,'CONFIRMED',$7) RETURNING *`,
+        [shopId,staffId,serviceId,customerId,startsAt.toISOString(),endsAt.toISOString(),b.customerNotes||'Walk-in']);
+      await client.query(
+        `INSERT INTO appointment_events(appointment_id,shop_id,actor_user_id,event_type,to_status,details)
+         VALUES($1,$2,$3,'WALK_IN_CREATED','CONFIRMED',$4)`,
+        [inserted.rows[0].id,shopId,req.user.id,JSON.stringify({source:'front-desk'})]);
+      await client.query('COMMIT');
+      res.status(201).json({appointment:inserted.rows[0]});
+    }catch(error){
+      await client.query('ROLLBACK');
+      if(error.code==='23P01') return res.status(409).json({error:'This barber already has an appointment at that time.'});
+      throw error;
+    }finally{client.release();}
+  }));
+
+  router.patch('/front-desk/appointments/:appointmentId/status', ...frontDeskRoles, asyncRoute(async(req,res)=>{
+    const appointmentId=id(req.params.appointmentId),shopId=id(req.body?.shopId),nextStatus=req.body?.status;
+    const allowed={
+      BOOKED:['CONFIRMED','CANCELLED','NO_SHOW'],
+      CONFIRMED:['IN_PROGRESS','CANCELLED','NO_SHOW'],
+      IN_PROGRESS:['READY_TO_BILL','CANCELLED'],
+      READY_TO_BILL:['COMPLETED','CANCELLED']
+    };
+    if(!appointmentId||!shopId||!Object.hasOwn(allowed,req.body?.fromStatus)||!allowed[req.body.fromStatus].includes(nextStatus))
+      return res.status(400).json({error:'Invalid appointment status transition.'});
+    if(!await shopAccess(req.user,shopId)) return res.status(404).json({error:'Shop not found.'});
+    const client=await pool.connect();
+    try{
+      await client.query('BEGIN');
+      const updated=await client.query(
+        `UPDATE appointments SET status=$3,updated_at=NOW()
+         WHERE id=$1 AND shop_id=$2 AND status=$4 RETURNING *`,
+        [appointmentId,shopId,nextStatus,req.body.fromStatus]);
+      if(!updated.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'Appointment not found or its status changed. Refresh the calendar and try again.'});}
+      await client.query(
+        `INSERT INTO appointment_events(appointment_id,shop_id,actor_user_id,event_type,from_status,to_status)
+         VALUES($1,$2,$3,'STATUS_CHANGED',$4,$5)`,
+        [appointmentId,shopId,req.user.id,req.body.fromStatus,nextStatus]);
+      await client.query('COMMIT');
+      res.json({appointment:updated.rows[0]});
+    }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+  }));
+
   return router;
 }
 module.exports={createOperationsRouter};
