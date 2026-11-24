@@ -106,7 +106,7 @@ async function run(){
    const appointmentTime=rawTime?new Date(rawTime).toLocaleString(locale,{timeZone:row.shop_timezone||'Asia/Kolkata',dateStyle:'medium',timeStyle:'short'}):'';
    const body=String(row.body).replace(/\{\{shop_name\}\}/g,row.shop_name).replace(/\{\{customer_name\}\}/g,row.customer_name).replace(/\{\{appointment_id\}\}/g,String(row.appointment_id||'')).replace(/\{\{waitlist_entry_id\}\}/g,String(row.metadata?.waitlistEntryId||'')).replace(/\{\{appointment_time\}\}/g,appointmentTime).replace(/\{\{service_name\}\}/g,row.service_name||'');
    const templateValue=row.template_key==='WAITLIST_OFFER'?row.metadata?.waitlistEntryId:row.appointment_id;
-   const secondValue=['REBOOKING_NUDGE','REVIEW_REQUEST'].includes(row.template_key)?(row.service_name||''):appointmentTime;
+   const secondValue=row.template_key==='TIP_PAYMENT_LINK'?(row.metadata?.tipPaymentLink||''):['REBOOKING_NUDGE','REVIEW_REQUEST'].includes(row.template_key)?(row.service_name||''):appointmentTime;
    const variables=templateValue==null?{}:{'1':String(templateValue),'2':String(secondValue),'3':String(row.shop_name||'')};
    const sent=await deliver(row.channel,destination,{subject:row.subject,body,variables},process.env,global.fetch,{provider:row.whatsapp_provider,phoneNumberId:row.whatsapp_phone_number_id,from:row.channel==='SMS'?row.sms_from:row.channel==='EMAIL'?row.sender_email:null,templateName:row.provider_template_name,templateStatus:row.provider_template_status,language:row.provider_template_language||'en_US'});
    await pool.query("UPDATE shop_customer_reminders SET status='SENT',sent_at=NOW(),processing_at=NULL,provider_reference=$2 WHERE id=$1",[row.id,sent.reference]);
