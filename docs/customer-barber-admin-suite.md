@@ -1,6 +1,6 @@
 # Customer, barber and platform operations
 
-Migration: `032_customer_barber_admin_suite.sql` (additive; preserves existing customer, shop, booking and payment rows).
+Migration: `034_totp_replay_protection.sql` (uses the already-merged additive feature schema in migration 032 and leaves migrations 032/033 unchanged). (additive; preserves existing customer, shop, booking and payment rows).
 
 ## Customer workflows
 
