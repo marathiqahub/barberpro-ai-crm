@@ -1,0 +1,3 @@
+CREATE TABLE IF NOT EXISTS marketing_leads (id BIGSERIAL PRIMARY KEY,name VARCHAR(120) NOT NULL,shop_name VARCHAR(160) NOT NULL,phone VARCHAR(20) NOT NULL,email VARCHAR(254) NOT NULL,segment VARCHAR(30) NOT NULL CHECK(segment IN ('independent','shop','multi_outlet')),plan VARCHAR(30),message VARCHAR(1000),consent_at TIMESTAMPTZ NOT NULL,status VARCHAR(20) NOT NULL DEFAULT 'NEW' CHECK(status IN ('NEW','CONTACTED','QUALIFIED','CLOSED','SPAM')),created_at TIMESTAMPTZ NOT NULL DEFAULT NOW());
+CREATE INDEX IF NOT EXISTS marketing_leads_created_at_idx ON marketing_leads(created_at DESC);
+CREATE INDEX IF NOT EXISTS marketing_leads_status_idx ON marketing_leads(status,created_at DESC);
