@@ -1,5 +1,7 @@
 const argon2 = require('argon2');
 const { createTokenService } = require('../auth/tokens');
+const crypto = require('node:crypto');
+const { generateSecret, encryptSecret, decryptSecret, verifyTotp, otpauthUri } = require('../advanced/totp');
 
 const passwordHashOptions = { type: argon2.argon2id, memoryCost: 19456, timeCost: 2, parallelism: 1 };
 const dummyPasswordHashPromise = argon2.hash('not-a-real-user-password-for-timing-equalization', passwordHashOptions);
@@ -26,7 +28,7 @@ function createAuthController(pool, authConfig) {
   }
 
   async function register(req, res, next) {
-    const { name, email, password } = req.body ?? {};
+    const { name, email, password, phone = null } = req.body ?? {};
     const normalizedName = typeof name === 'string' ? name.trim() : '';
     const normalizedEmail = typeof email === 'string' ? email.trim().toLowerCase() : '';
     const errors = {};
@@ -37,7 +39,7 @@ function createAuthController(pool, authConfig) {
     if (normalizedEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
       errors.email = 'A valid email address is required.';
     }
-    if (typeof password !== 'string' || password.length < 12 || password.length > 128) {
+    if (phone !== null && phone !== '' && (typeof phone !== 'string' || phone.length > 30 || !/^[+\\d().\\-\\s]{7,30}$/.test(phone.trim()))) errors.phone = 'Provide a valid phone number.';\n    if (typeof password !== 'string' || password.length < 12 || password.length > 128) {
       errors.password = 'Password must be between 12 and 128 characters.';
     }
     if (Object.keys(errors).length) {
@@ -54,12 +56,23 @@ function createAuthController(pool, authConfig) {
         timeCost: 2,
         parallelism: 1
       });
-      const inserted = await client.query(
-        `INSERT INTO users (name, email, password_hash, role)
-         VALUES ($1, $2, $3, 'CUSTOMER')
-         RETURNING id, name, email, role`,
-        [normalizedName, normalizedEmail, passwordHash]
+      const pending = await client.query(
+        `SELECT id FROM users WHERE email=$1 AND role='CUSTOMER' AND imported_pending_activation=TRUE FOR UPDATE`,
+        [normalizedEmail]
       );
+      const inserted = pending.rowCount
+        ? await client.query(
+            `UPDATE users SET name=$2,phone=COALESCE(NULLIF($3,''),phone),password_hash=$4,
+               imported_pending_activation=FALSE,is_active=TRUE,updated_at=NOW()
+             WHERE id=$1 RETURNING id,name,email,role`,
+            [pending.rows[0].id,normalizedName,phone||'',passwordHash]
+          )
+        : await client.query(
+            `INSERT INTO users (name,email,phone,password_hash,role)
+             VALUES ($1,$2,NULLIF($3,''),$4,'CUSTOMER')
+             RETURNING id,name,email,role`,
+            [normalizedName,normalizedEmail,phone||'',passwordHash]
+          );
       const user = inserted.rows[0];
       const pair = tokens.issueTokenPair(user);
       await saveRefreshToken(client, user.id, pair);
@@ -85,7 +98,8 @@ function createAuthController(pool, authConfig) {
 
     try {
       const found = await pool.query(
-        'SELECT id, name, email, role, password_hash, is_active FROM users WHERE email = $1',
+        `SELECT u.id,u.name,u.email,u.role,u.password_hash,u.is_active,COALESCE(t.enabled,FALSE) totp_enabled,t.secret_encrypted
+         FROM users u LEFT JOIN user_totp t ON t.user_id=u.id WHERE u.email=$1`,
         [normalizedEmail]
       );
       const user = found.rows[0];
@@ -93,6 +107,20 @@ function createAuthController(pool, authConfig) {
       const passwordMatches = await argon2.verify(hashToVerify, password);
       if (!user || !user.is_active || !passwordMatches) {
         return res.status(401).json({ error: 'Invalid email or password.' });
+      }
+      if (['ADMIN','BARBER'].includes(user.role) && process.env.TOTP_REQUIRED_FOR_PRIVILEGED==='true' && !user.totp_enabled) {
+        const secret=generateSecret(),enrollmentToken=crypto.randomBytes(32).toString('base64url');
+        await pool.query(`INSERT INTO user_totp(user_id,pending_secret_encrypted,enrollment_token_hash,enrollment_expires_at,updated_at)
+          VALUES($1,$2,$3,NOW()+INTERVAL '10 minutes',NOW())
+          ON CONFLICT(user_id) DO UPDATE SET pending_secret_encrypted=EXCLUDED.pending_secret_encrypted,
+            enrollment_token_hash=EXCLUDED.enrollment_token_hash,enrollment_expires_at=EXCLUDED.enrollment_expires_at,updated_at=NOW()`,
+          [user.id,encryptSecret(secret),crypto.createHash('sha256').update(enrollmentToken).digest('hex')]);
+        return res.status(403).json({error:'Authenticator setup is required before sign-in.',mfaSetupRequired:true,
+          enrollmentToken,secret,otpauthUri:otpauthUri(secret,user.email)});
+      }
+      if (['ADMIN','BARBER'].includes(user.role) && user.totp_enabled) {
+        if (!req.body?.totpCode || !verifyTotp(decryptSecret(user.secret_encrypted),req.body.totpCode))
+          return res.status(401).json({error:'A valid authenticator code is required.',mfaRequired:true});
       }
 
       const pair = tokens.issueTokenPair(user);
