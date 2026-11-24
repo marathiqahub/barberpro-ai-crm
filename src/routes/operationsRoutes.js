@@ -134,6 +134,7 @@ function createOperationsRouter(pool, tokenService) {
       if(paid>total){await client.query('ROLLBACK');return res.status(400).json({error:'Amount paid cannot exceed invoice total.'});}
       const prefix=profile.invoice_prefix||'BP', invoiceNumber=await nextNumber(client,shopId,'INVOICE',fy,prefix);
       const mode=['CASH','UPI','CARD','RAZORPAY','MIXED','UNPAID'].includes(b.paymentMode)?b.paymentMode:(paid?'MIXED':'UNPAID');
+      if(mode==='MIXED'&&paid>0&&(!Array.isArray(b.paymentBreakdown)||!b.paymentBreakdown.length)){await client.query('ROLLBACK');return res.status(400).json({error:'Provide paymentBreakdown for mixed payments so each tender can be reconciled.'});}
       const inserted=await client.query(
         `INSERT INTO sales_invoices (shop_id,invoice_number,financial_year,document_type,issue_date,seller_gstin,seller_legal_name,seller_trade_name,seller_address,seller_state_code,customer_name,customer_email,customer_phone,customer_gstin,place_of_supply_state_code,subtotal_paise,discount_paise,taxable_paise,cgst_paise,sgst_paise,igst_paise,total_paise,amount_paid_paise,payment_mode,created_by)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25) RETURNING *`,
