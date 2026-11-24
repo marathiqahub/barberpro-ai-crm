@@ -1,5 +1,6 @@
 const express = require('express');
 const { createAuthMiddleware } = require('../auth/middleware');
+const { scheduleAppointmentReminders } = require('../messaging/reminders');
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const ID_RE = /^[1-9]\d*$/;
@@ -293,6 +294,7 @@ function createBookingRouter(pool, tokenService) {
          RETURNING id, shop_id, staff_id, service_id, customer_id, starts_at, ends_at, status, customer_notes, created_at`,
         [shopId, staffId, serviceId, req.user.id, new Date(startMs).toISOString(), slot.rows[0].duration_minutes, customerNotes]
       );
+      await scheduleAppointmentReminders(client,inserted.rows[0],{transactional:true});
       await client.query('COMMIT');
       res.status(201).json({ appointment: inserted.rows[0] });
     } catch (error) {
@@ -333,6 +335,7 @@ function createBookingRouter(pool, tokenService) {
       [appointmentId, req.user.id, req.user.role]
     );
     if (!result.rowCount) return res.status(404).json({ error: 'Upcoming appointment not found or cannot be cancelled.' });
+    try{await pool.query("UPDATE shop_customer_reminders SET status='CANCELLED',processing_at=NULL WHERE appointment_id=$1 AND status IN ('PENDING','PROCESSING')",[appointmentId]);}catch(error){if(error.code!=='42P01')throw error;}
     res.json({ appointment: result.rows[0] });
   }));
 

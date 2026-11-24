@@ -15,6 +15,10 @@ const { createMarketingRouter } = require('./routes/marketingRoutes');
 const { createCrmRouter } = require('./routes/crmRoutes');
 const { createInventoryRouter } = require('./routes/inventoryRoutes');
 const { createCommercialRouter } = require('./routes/commercialRoutes');
+const { createPayrollRouter } = require('./routes/payrollRoutes');
+const { createMessagingRouter } = require('./routes/messagingRoutes');
+const { createBookingAssistantRouter } = require('./routes/bookingAssistantRoutes');
+const { createWhatsAppRouter } = require('./routes/whatsappRoutes');
 const { loadAuthConfig } = require('./auth/config');
 const { createTokenService } = require('./auth/tokens');
 const { Pool } = require('pg');
@@ -43,7 +47,7 @@ app.use(helmet({ contentSecurityPolicy: { directives: { scriptSrc: ["'self'", 'h
 const bookingTokens = createTokenService(loadAuthConfig());
 const paymentRouter = createPaymentRouter(pool, bookingTokens);
 app.use('/api/payments', (req, res, next) => req.path === '/webhook' ? paymentRouter(req, res, next) : next()); // raw webhook only before express.json
-app.use(express.json({ limit: '10kb' }));
+app.use(express.json({ limit: '1mb', verify: (req, res, buffer) => { req.rawBody = Buffer.from(buffer); } }));
 
 app.get('/health/live', (req, res) => res.status(200).json({ status: 'ok' }));
 app.get('/health/ready', async (req, res) => {
@@ -74,6 +78,10 @@ app.use('/api', createOperationsRouter(pool, bookingTokens));
 app.use('/api', createCrmRouter(pool, bookingTokens));
 app.use('/api', createInventoryRouter(pool, bookingTokens));
 app.use('/api', createCommercialRouter(pool, bookingTokens));
+app.use('/api', createPayrollRouter(pool, bookingTokens));
+app.use('/api', createMessagingRouter(pool, bookingTokens));
+app.use('/api', createBookingAssistantRouter(pool, bookingTokens));
+app.use('/api', createWhatsAppRouter(pool));
 app.use('/api/payments', paymentRouter);
 app.use('/api/marketing', createMarketingRouter(pool, bookingTokens));
 
