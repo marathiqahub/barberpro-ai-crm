@@ -93,7 +93,7 @@ async function run(){
  for(const row of rows){
   let destination=row.channel==='EMAIL'?row.email:row.phone;
   try{
-   if(row.channel==='SMS'&&/^\\+?91/.test(destination||'')&&(!process.env.TWILIO_DLT_PE_ID||!row.provider_template_name)){await pool.query("UPDATE shop_customer_reminders SET status='PENDING',processing_at=NULL WHERE id=$1",[row.id]);continue;}
+   if(row.channel==='SMS'&&/^\+?91/.test(destination||'')&&(!process.env.TWILIO_DLT_PE_ID||!row.provider_template_name||row.provider_template_status!=='APPROVED')){await pool.query("UPDATE shop_customer_reminders SET status='PENDING',processing_at=NULL WHERE id=$1",[row.id]);continue;}
    if(!row.enabled_channels?.includes(row.channel))throw Object.assign(new Error('This channel is not enabled for the shop'),{code:'CHANNEL_DISABLED'});
    if(row.channel!=='EMAIL'&&!row.phone_verified_at)throw Object.assign(new Error('Customer phone number is not verified'),{code:'PHONE_NOT_VERIFIED'});
    if(!destination)throw Object.assign(new Error('Customer has no destination for this channel'),{code:'NO_DESTINATION'});
@@ -104,7 +104,7 @@ async function run(){
    const rawTime=row.template_key==='WAITLIST_OFFER'?row.metadata?.offeredStartsAt:row.appointment_starts_at;
    const locale=row.preferred_locale==='hi'?'hi-IN':row.preferred_locale==='mr'?'mr-IN':'en-IN';
    const appointmentTime=rawTime?new Date(rawTime).toLocaleString(locale,{timeZone:row.shop_timezone||'Asia/Kolkata',dateStyle:'medium',timeStyle:'short'}):'';
-   const body=String(row.body).replace(/\{\{shop_name\}\}/g,row.shop_name).replace(/\{\{customer_name\}\}/g,row.customer_name).replace(/\{\{appointment_id\}\}/g,String(row.appointment_id||'')).replace(/\{\{waitlist_entry_id\}\}/g,String(row.metadata?.waitlistEntryId||'')).replace(/\{\{appointment_time\}\}/g,appointmentTime).replace(/\{\{service_name\}\}/g,row.service_name||'');
+   const body=String(row.body).replace(/\{\{shop_name\}\}/g,row.shop_name).replace(/\{\{customer_name\}\}/g,row.customer_name).replace(/\{\{appointment_id\}\}/g,String(row.appointment_id||'')).replace(/\{\{waitlist_entry_id\}\}/g,String(row.metadata?.waitlistEntryId||'')).replace(/\{\{appointment_time\}\}/g,appointmentTime).replace(/\{\{service_name\}\}/g,row.service_name||'').replace(/\{\{tip_payment_link\}\}/g,row.metadata?.tipPaymentLink||'');
    const templateValue=row.template_key==='WAITLIST_OFFER'?row.metadata?.waitlistEntryId:row.appointment_id;
    const secondValue=row.template_key==='TIP_PAYMENT_LINK'?(row.metadata?.tipPaymentLink||''):['REBOOKING_NUDGE','REVIEW_REQUEST'].includes(row.template_key)?(row.service_name||''):appointmentTime;
    const variables=templateValue==null?{}:{'1':String(templateValue),'2':String(secondValue),'3':String(row.shop_name||'')};
