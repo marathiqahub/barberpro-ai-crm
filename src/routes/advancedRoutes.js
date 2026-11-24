@@ -304,7 +304,7 @@ function createAdvancedRouter(pool,tokenService){
   const secret=process.env.RAZORPAY_WEBHOOK_SECRET;if(!secret)return s.status(503).send('Webhook secret is not configured.');
   const sig=q.get('x-razorpay-signature')||'',raw=q.rawBody||Buffer.from(JSON.stringify(q.body||{}));if(!safeEqual(hmac(secret,raw),sig))return s.sendStatus(400);
   const event=q.body||{},entity=event.payload?.subscription?.entity;if(!entity?.id)return s.json({received:true,ignored:true});
-  const map={subscription.activated:'ACTIVE',subscription.authenticated:'AUTHENTICATED',subscription.pending:'PENDING',subscription.halted:'HALTED',subscription.cancelled:'CANCELLED',subscription.completed:'COMPLETED',subscription.charged:'ACTIVE'};
+  const map={'subscription.activated':'ACTIVE','subscription.authenticated':'AUTHENTICATED','subscription.pending':'PENDING','subscription.halted':'HALTED','subscription.cancelled':'CANCELLED','subscription.completed':'COMPLETED','subscription.charged':'ACTIVE'};
   const status=map[event.event];if(status)await pool.query(`UPDATE shop_subscriptions SET status=$2,current_start=to_timestamp(NULLIF($3,0)),current_end=to_timestamp(NULLIF($4,0)),next_charge_at=to_timestamp(NULLIF($5,0)),provider_payload=provider_payload||$6::jsonb,updated_at=NOW() WHERE razorpay_subscription_id=$1`,[entity.id,status,Number(entity.current_start||0),Number(entity.current_end||0),Number(entity.charge_at||0),JSON.stringify({lastWebhook:event.event})]);
   s.json({received:true});
  }));
