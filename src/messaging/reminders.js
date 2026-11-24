@@ -14,6 +14,7 @@ async function scheduleAppointmentReminders(db,appointment,options={}){
    JOIN shop_message_templates t ON t.shop_id=c.shop_id AND t.channel=c.channel AND t.template_key=rt.template_key AND t.is_active=TRUE
    JOIN users u ON u.id=c.customer_id
    WHERE c.shop_id=$1 AND c.customer_id=$2 AND c.consent=TRUE AND c.revoked_at IS NULL
+   AND ($4::timestamptz >= NOW()+make_interval(hours=>rt.hours_before) OR rt.hours_before=2)
    AND ((c.channel='EMAIL' AND c.destination=u.email) OR (c.channel IN ('SMS','WHATSAPP') AND c.destination=u.phone))
    ON CONFLICT(dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING
    RETURNING id,channel,template_key,scheduled_at`,[appointment.shop_id,appointment.customer_id,appointment.id,appointment.starts_at]);
