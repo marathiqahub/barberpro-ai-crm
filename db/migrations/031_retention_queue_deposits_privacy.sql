@@ -85,7 +85,7 @@ WHERE preferred_date IS NULL
    OR preferred_to IS DISTINCT FROM preferred_time_end;
 
 CREATE OR REPLACE FUNCTION sync_shop_waitlist_legacy_window()
-RETURNS TRIGGER LANGUAGE plpgsql AS $
+RETURNS TRIGGER LANGUAGE plpgsql AS $body$
 BEGIN
   IF TG_OP='INSERT' THEN
     NEW.requested_date := COALESCE(NEW.requested_date,NEW.preferred_date);
@@ -118,7 +118,7 @@ BEGIN
     END IF;
   END IF;
   RETURN NEW;
-END $;
+END $body$;
 
 DROP TRIGGER IF EXISTS shop_waitlist_window_compatibility ON shop_waitlist_entries;
 CREATE TRIGGER shop_waitlist_window_compatibility
