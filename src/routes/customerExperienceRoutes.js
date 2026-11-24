@@ -208,9 +208,9 @@ function createCustomerExperienceRouter(pool, tokenService, options = {}) {
   }));
 
   router.put('/admin/shops/:shopId/inventory/items/:itemId/retail-price',...admin,wrap(async(req,res)=>{
-    const shopId=id(req.params.shopId),itemId=id(req.params.itemId),price=req.body?.retailPricePaise;
-    if(!shopId||!itemId||!Number.isSafeInteger(price)||price<0)return res.status(400).json({error:'Provide a non-negative retail price in paise.'});
-    const out=await pool.query('UPDATE shop_inventory_items SET retail_price_paise=$3,updated_at=NOW() WHERE id=$1 AND shop_id=$2 AND is_active=TRUE RETURNING id,sku,name,quantity,retail_price_paise,reorder_level',[itemId,shopId,price]);
+    const shopId=id(req.params.shopId),itemId=id(req.params.itemId),price=req.body?.retailPricePaise,hsn=req.body?.hsnSacCode||null,tax=req.body?.taxRateBps??0;
+    if(!shopId||!itemId||!Number.isSafeInteger(price)||price<0||(hsn!==null&&(typeof hsn!=='string'||!/^[A-Za-z0-9]{4,8}$/.test(hsn)))||!Number.isInteger(tax)||tax<0||tax>10000)return res.status(400).json({error:'Provide valid retail price, optional HSN/SAC and GST rate in basis points.'});
+    const out=await pool.query('UPDATE shop_inventory_items SET retail_price_paise=$3,retail_hsn_sac_code=$4,retail_tax_rate_bps=$5,updated_at=NOW() WHERE id=$1 AND shop_id=$2 AND is_active=TRUE RETURNING id,sku,name,quantity,retail_price_paise,retail_hsn_sac_code,retail_tax_rate_bps,reorder_level',[itemId,shopId,price,hsn,tax]);
     if(!out.rowCount)return res.status(404).json({error:'Active inventory item not found.'});
     res.json({item:out.rows[0]});
   }));
