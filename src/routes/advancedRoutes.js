@@ -198,8 +198,12 @@ function createAdvancedRouter(pool,tokenService){
  r.patch('/admin/services/:serviceId/operations',...admin,wrap(async(q,s)=>{
   const serviceId=id(q.params.serviceId),cleanup=Number(q.body?.cleanupMinutes),chemical=q.body?.chemicalConsentRequired;
   if(!serviceId||!Number.isInteger(cleanup)||cleanup<0||cleanup>120||typeof chemical!=='boolean')return s.status(400).json({error:'Provide cleanupMinutes (0–120) and chemicalConsentRequired boolean.'});
-  const out=await pool.query('UPDATE services SET cleanup_minutes=$2,chemical_consent_required=$3,updated_at=NOW() WHERE id=$1 RETURNING id,shop_id,name,cleanup_minutes,chemical_consent_required',[serviceId,cleanup,chemical]);
-  if(!out.rowCount)return s.sendStatus(404);s.json({service:out.rows[0]});
+  const c=await pool.connect();try{await c.query('BEGIN');
+   const out=await c.query('UPDATE services SET cleanup_minutes=$2,chemical_consent_required=$3,updated_at=NOW() WHERE id=$1 RETURNING id,shop_id,name,cleanup_minutes,chemical_consent_required',[serviceId,cleanup,chemical]);
+   if(!out.rowCount){await c.query('ROLLBACK');return s.sendStatus(404);}
+   await c.query("UPDATE appointments SET ends_at=ends_at WHERE service_id=$1 AND status IN('BOOKED','CONFIRMED') AND starts_at>NOW()",[serviceId]);
+   await c.query('COMMIT');s.json({service:out.rows[0]});
+  }catch(e){await c.query('ROLLBACK');if(e.code==='23P01')return s.status(409).json({error:'The new cleanup buffer conflicts with existing bookings. Adjust the buffer or reschedule the affected appointments.'});throw e;}finally{c.release();}
  }));
 
  // CSV/Tally-oriented sales export. Tax mapping remains subject to the shop accountant's review.
