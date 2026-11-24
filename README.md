@@ -191,3 +191,36 @@ Routes are ADMIN-only except the customer feedback submission route. Payroll rep
 ## Messaging, payroll, AI booking and mobile
 
 The consolidated messaging/payroll/localization implementation is documented in [PAYROLL_AND_MESSAGING.md](PAYROLL_AND_MESSAGING.md). Android build and Play Console release prerequisites are documented in [ANDROID_RELEASE.md](ANDROID_RELEASE.md). The reminder worker is scheduled through the optional Render Cron service in `render.yaml`; the Cron service uses a paid Starter plan and requires provider credentials and a Render Blueprint sync. Statutory payroll rates must be configured and reviewed by a qualified Maharashtra payroll professional. Marathi translations are being expanded incrementally; review the full UI before treating localization as complete.
+
+
+## Marketing website, CRM hostname and interactive demo
+
+BarberPro supports a single-brand, two-experience domain layout:
+- Public marketing and sales: `https://www.barberpro.in`
+- Authenticated CRM: `https://app.barberpro.in`
+- Isolated product tour: `https://www.barberpro.in/demo`
+
+These are proposed hostnames; the domain must be registered and DNS controlled by the owner before they can go live. Both custom hostnames are intended to be attached to the **existing Render web service**. Do not create a second web service with a separate database for the CRM split.
+
+Optional Render environment variables (configure only after adding both custom domains to the existing web service):
+- `MARKETING_HOSTNAME=www.barberpro.in`
+- `APP_HOSTNAME=app.barberpro.in`
+- `MARKETING_BASE_URL=https://www.barberpro.in`
+- `APP_BASE_URL=https://app.barberpro.in`
+
+The hostname settings are optional. With them unset, the existing public homepage and legacy `/app` CRM entry point behave as before. When configured, the app hostname serves the existing `workspace.html` at its root, while the marketing hostname keeps the public homepage. Marketing-site `/app` links redirect to the app hostname; app-host `/demo` links return to the marketing demo.
+
+### Interactive demo safety
+
+`/demo` is a static product tour with fictional sample shop data. Booking status changes, customer search and sample invoices are held only in browser memory for the current page session. It does not call CRM write APIs, create database records, authenticate as a real user, send messages, or collect payments. The demo page is marked `noindex,nofollow`.
+
+### Custom-domain cutover checklist
+
+1. Register and verify ownership of `barberpro.in` (or select the final brand domain).
+2. In the existing Render web service, add `www.barberpro.in` and `app.barberpro.in` as custom domains. Follow the exact DNS records Render displays for each hostname; do not guess A/CNAME targets.
+3. Wait until Render reports both domains verified and TLS certificates active.
+4. Set the four optional hostname/base-URL variables above on the existing service, then deploy after review/approval.
+5. Verify marketing homepage, `/demo`, app-host root, legacy `/app` redirect, login, customer/barber/admin roles, Razorpay return URLs and provider webhooks.
+6. Update external OAuth/payment/webhook allowlists and Android production URL only after the final hostname is confirmed.
+
+No DNS, domain purchase, Render custom-domain, environment-variable, account, or database changes are performed by this code change.
