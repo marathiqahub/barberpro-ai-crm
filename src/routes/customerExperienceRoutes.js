@@ -149,6 +149,14 @@ function createCustomerExperienceRouter(pool, tokenService, options = {}) {
     res.json({entries:out.rows});
   }));
 
+  router.get('/customer/shops/:shopId/catalog',...customer,wrap(async(req,res)=>{
+    const shopId=id(req.params.shopId);if(!shopId)return res.status(400).json({error:'Invalid shop.'});
+    const [services,staff]=await Promise.all([
+      pool.query('SELECT id,name,duration_minutes,price FROM services WHERE shop_id=$1 AND is_active=TRUE ORDER BY name',[shopId]),
+      pool.query('SELECT id,display_name FROM shop_staff WHERE shop_id=$1 AND is_active=TRUE ORDER BY display_name',[shopId])
+    ]);
+    res.json({services:services.rows,staff:staff.rows});
+  }));
   router.put('/customer/shops/:shopId/profile/preferences',...customer,wrap(async(req,res)=>{
     const shopId=id(req.params.shopId),b=req.body||{},staffId=b.preferredStaffId==null?null:id(b.preferredStaffId),serviceId=b.preferredServiceId==null?null:id(b.preferredServiceId);
     if(!shopId||(b.careNotes!==undefined&&(typeof b.careNotes!=='string'||b.careNotes.length>2000))||typeof b.photoConsent!=='boolean')return res.status(400).json({error:'Provide valid preferences, care notes and explicit photo consent.'});
