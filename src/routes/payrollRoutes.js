@@ -25,10 +25,9 @@ function createPayrollRouter(pool,tokens){
    const staff=await c.query(`SELECT DISTINCT ON(st.id) st.id,pp.* FROM shop_staff st JOIN shop_staff_payroll_profiles pp ON pp.staff_id=st.id AND pp.shop_id=st.shop_id
     WHERE st.shop_id=$1 AND st.is_active=TRUE AND pp.active=TRUE AND pp.effective_from<=$3 ORDER BY st.id,pp.effective_from DESC`,[shop,periodStart,periodEnd]);
    for(const p of staff.rows){
-    const sales=await c.query(`SELECT COALESCE(SUM(l.commission_paise),0)::bigint commission,COALESCE(SUM(l.tip_paise),0)::bigint tips
+    const sales=await c.query(`SELECT COALESCE(SUM(l.taxable_paise),0)::bigint taxable,COALESCE(SUM(l.tip_paise),0)::bigint tips
     FROM sales_invoice_lines l JOIN sales_invoices i ON i.id=l.invoice_id WHERE i.shop_id=$1 AND l.staff_id=$2 AND i.status='ISSUED' AND i.issue_date BETWEEN $3 AND $4`,[shop,p.staff_id,periodStart,periodEnd]);
-    const earning={commissionPaise:p.employment_type==='COMMISSION_ONLY'?Math.round(Number(sales.rows[0].commission)):Math.round(Number(sales.rows[0].commission)),tipsPaise:Number(sales.rows[0].tips)};
-    if(p.employment_type==='COMMISSION_ONLY'&&Number(p.commission_rate_bps)>0){const raw=await c.query(`SELECT COALESCE(SUM(l.taxable_paise),0)::bigint base FROM sales_invoice_lines l JOIN sales_invoices i ON i.id=l.invoice_id WHERE i.shop_id=$1 AND l.staff_id=$2 AND i.status='ISSUED' AND i.issue_date BETWEEN $3 AND $4`,[shop,p.staff_id,periodStart,periodEnd]);earning.commissionPaise=Math.round(Number(raw.rows[0].base)*Number(p.commission_rate_bps)/10000)}
+    const earning={commissionPaise:Math.round(Number(sales.rows[0].taxable)*Number(p.commission_rate_bps)/10000),tipsPaise:Number(sales.rows[0].tips)}
     const slip=calculatePayslip(p,earning);
     await c.query(`INSERT INTO shop_payslips(payroll_run_id,shop_id,staff_id,employment_type,basic_gross_paise,commission_paise,tips_paise,pf_employee_paise,esi_employee_paise,professional_tax_paise,tds_paise,other_deductions_paise,employer_pf_paise,employer_esi_paise,gross_paise,deductions_paise,net_paise,calculation)
     VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18::jsonb)`,
