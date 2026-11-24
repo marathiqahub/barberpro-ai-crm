@@ -1,6 +1,6 @@
 const express = require('express');
 const { createAuthMiddleware } = require('../auth/middleware');
-const { validateLoyaltyTransaction, nextLoyaltyBalance } = require('../crm/rules');
+const { validateLoyaltyTransaction, nextLoyaltyBalance, campaignCanBePrepared } = require('../crm/rules');
 
 function createCrmRouter(pool, tokenService) {
   const router = express.Router();
@@ -120,8 +120,7 @@ function createCrmRouter(pool, tokenService) {
     const name=typeof b.name==='string'?b.name.trim():'',message=typeof b.message==='string'?b.message.trim():'';
     const channel=b.channel,audience=b.audience||'ALL_CONSENTED',subject=typeof b.subject==='string'?b.subject.trim():null;
     if(!shopId||!name||name.length>160||!message||message.length>2000||
-       !['EMAIL','SMS'].includes(channel)||!['ALL_CONSENTED','NO_VISIT_30_DAYS','LOYALTY_MEMBERS'].includes(audience)||
-       (subject&&subject.length>200)||(channel==='EMAIL'&&!subject))
+       !campaignCanBePrepared(channel,subject,message,audience))
       return res.status(400).json({error:'Provide a valid campaign name, channel, email subject when applicable, message and audience.'});
     if(!await activeShop(shopId))return res.status(404).json({error:'Active shop not found.'});
     const result=await pool.query(
