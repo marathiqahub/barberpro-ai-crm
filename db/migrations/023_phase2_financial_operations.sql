@@ -40,3 +40,10 @@ CREATE TABLE IF NOT EXISTS shop_daily_closures (
 );
 CREATE INDEX IF NOT EXISTS shop_daily_closures_date_idx
   ON shop_daily_closures(shop_id,business_date DESC);
+
+-- Preserve existing single-tender invoice receipts for daily cash reconciliation.
+INSERT INTO sales_invoice_payments(invoice_id,method,amount_paise,received_at)
+SELECT id,payment_mode,amount_paid_paise,created_at
+FROM sales_invoices
+WHERE amount_paid_paise>0 AND payment_mode IN ('CASH','UPI','CARD','RAZORPAY')
+ON CONFLICT DO NOTHING;
