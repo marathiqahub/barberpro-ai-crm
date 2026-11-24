@@ -162,9 +162,9 @@ function createCustomerExperienceRouter(pool, tokenService, options = {}) {
   }));
   router.put('/customer/shops/:shopId/profile/preferences',...customer,wrap(async(req,res)=>{
     const shopId=id(req.params.shopId),b=req.body||{},staffId=b.preferredStaffId==null?null:id(b.preferredStaffId),serviceId=b.preferredServiceId==null?null:id(b.preferredServiceId);
-    if(!shopId||(b.careNotes!==undefined&&(typeof b.careNotes!=='string'||b.careNotes.length>2000))||typeof b.photoConsent!=='boolean')return res.status(400).json({error:'Provide valid preferences, care notes and explicit photo consent.'});
+    if(!shopId||(b.preferredStaffId!=null&&!staffId)||(b.preferredServiceId!=null&&!serviceId)||(b.careNotes!==undefined&&(typeof b.careNotes!=='string'||b.careNotes.length>2000))||typeof b.photoConsent!=='boolean')return res.status(400).json({error:'Provide valid preferences, care notes and explicit photo consent.'});
     const out=await pool.query(`INSERT INTO shop_customer_profiles(shop_id,customer_id,preferred_staff_id,preferred_service_id,care_notes,photo_consent,photo_consent_at)
-      SELECT sh.id,$2,$3,$4,$5,$6,CASE WHEN $6 THEN NOW() ELSE NULL END FROM shops sh WHERE sh.id=$1 AND sh.is_active=TRUE
+      SELECT sh.id,$2,$3,$4,$5,$6,CASE WHEN $6 THEN NOW() ELSE NULL END FROM shops sh WHERE sh.id=$1 AND sh.is_active=TRUE AND ($3::bigint IS NULL OR EXISTS(SELECT 1 FROM shop_staff st WHERE st.id=$3 AND st.shop_id=sh.id AND st.is_active=TRUE)) AND ($4::bigint IS NULL OR EXISTS(SELECT 1 FROM services sv WHERE sv.id=$4 AND sv.shop_id=sh.id AND sv.is_active=TRUE))
       ON CONFLICT(shop_id,customer_id) DO UPDATE SET preferred_staff_id=EXCLUDED.preferred_staff_id,preferred_service_id=EXCLUDED.preferred_service_id,care_notes=EXCLUDED.care_notes,photo_consent=EXCLUDED.photo_consent,photo_consent_at=EXCLUDED.photo_consent_at,updated_at=NOW()
       RETURNING shop_id,customer_id,preferred_staff_id,preferred_service_id,care_notes,photo_consent,photo_consent_at`,[shopId,req.user.id,staffId,serviceId,b.careNotes||null,b.photoConsent]);
     if(!out.rowCount)return res.status(404).json({error:'Active shop not found.'});
