@@ -10,6 +10,7 @@ const { createPaymentRouter } = require('./routes/paymentRoutes');
 const { createOperatorRouter } = require('./routes/operatorRoutes');
 const { createAiRouter } = require('./routes/aiRoutes');
 const { createOperationsRouter } = require('./routes/operationsRoutes');
+const { createMarketingRouter } = require('./routes/marketingRoutes');
 const { loadAuthConfig } = require('./auth/config');
 const { createTokenService } = require('./auth/tokens');
 const { Pool } = require('pg');
@@ -66,6 +67,7 @@ app.use('/api', createDashboardRouter(pool, bookingTokens));
 app.use('/api', createAiRouter(pool, bookingTokens));
 app.use('/api', createOperationsRouter(pool, bookingTokens));
 app.use('/api/payments', paymentRouter);
+app.use('/api/marketing', createMarketingRouter(pool, bookingTokens));
 
 app.post(
   '/api/customers',
@@ -113,7 +115,9 @@ app.post(
   }
 );
 
-app.use(express.static(require('node:path').join(__dirname, '..', 'public'), { index: 'index.html' }));
+const publicDir = require('node:path').join(__dirname, '..', 'public');
+app.get(['/app', '/app/*'], (req, res) => res.sendFile(require('node:path').join(publicDir, 'workspace.html')));
+app.use(express.static(publicDir, { index: 'index.html' }));
 app.get('*', (req, res, next) => { if (req.path.startsWith('/api/')) return next(); return res.sendFile(require('node:path').join(__dirname, '..', 'public', 'index.html')); });
 app.use((error, req, res, next) => {
   if (error.type === 'entity.parse.failed') {
