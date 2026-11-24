@@ -2,57 +2,86 @@
 require('dotenv').config();
 const {Pool}=require('pg');
 const {deliver}=require('../src/messaging/delivery');
+const {offerWaitlistEntry}=require('../src/routes/retentionRoutes');
 const pool=new Pool({connectionString:process.env.DATABASE_URL,max:2});
+async function refillExpiredWaitlistOffers(){
+ const expired=await pool.query(`UPDATE shop_waitlist_entries SET status='EXPIRED',updated_at=NOW()
+  WHERE status='OFFERED' AND offer_expires_at<=NOW() RETURNING shop_id,offered_from_appointment_id`);
+ for(const row of expired.rows)if(row.offered_from_appointment_id){
+  try{await offerWaitlistEntry(pool,row.shop_id,null,row.offered_from_appointment_id)}
+  catch(e){console.error('Waitlist auto-refill failed',row.shop_id,e.message)}
+ }
+}
+async function queueMissingAppointmentReminders(){
+ await pool.query(`WITH reminder_types(template_key,hours_before) AS (
+   VALUES ('APPOINTMENT_REMINDER_24H',24),('APPOINTMENT_REMINDER_2H',2)
+  )
+  INSERT INTO shop_customer_reminders(shop_id,customer_id,appointment_id,channel,template_key,scheduled_at,dedupe_key)
+  SELECT a.shop_id,a.customer_id,a.id,c.channel,rt.template_key,
+    GREATEST(NOW(),a.starts_at-make_interval(hours=>rt.hours_before)),
+    'appointment:'||a.id||':'||c.channel||':'||rt.template_key
+  FROM appointments a JOIN shop_message_consents c ON c.shop_id=a.shop_id AND c.customer_id=a.customer_id
+  JOIN shop_messaging_settings m ON m.shop_id=a.shop_id AND c.channel=ANY(m.enabled_channels)
+  JOIN reminder_types rt ON TRUE
+  JOIN shop_message_templates t ON t.shop_id=a.shop_id AND t.channel=c.channel AND t.template_key=rt.template_key AND t.is_active=TRUE
+  JOIN users u ON u.id=a.customer_id
+  WHERE a.status IN('BOOKED','CONFIRMED') AND a.starts_at>NOW()
+    AND (a.starts_at>=NOW()+make_interval(hours=>rt.hours_before) OR rt.hours_before=2)
+    AND c.consent=TRUE AND c.revoked_at IS NULL
+    AND ((c.channel='EMAIL' AND c.destination=u.email) OR (c.channel IN('SMS','WHATSAPP') AND c.destination=u.phone))
+  ON CONFLICT(dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`);
+}
+async function queueRebookingAndReviewNudges(){
+ await pool.query(`WITH last_visits AS (
+   SELECT DISTINCT ON (a.shop_id,a.customer_id) a.shop_id,a.customer_id,a.id appointment_id,a.starts_at,a.service_id
+   FROM appointments a WHERE a.status='COMPLETED' ORDER BY a.shop_id,a.customer_id,a.starts_at DESC
+  ), due AS (
+   SELECT lv.*,cp.preferred_interval_days,sh.name shop_name,sv.name service_name
+   FROM last_visits lv JOIN shop_customer_profiles cp ON cp.shop_id=lv.shop_id AND cp.customer_id=lv.customer_id
+   JOIN shops sh ON sh.id=lv.shop_id JOIN services sv ON sv.id=lv.service_id
+   WHERE cp.preferred_interval_days IS NOT NULL
+     AND lv.starts_at+make_interval(days=>cp.preferred_interval_days)<=NOW()
+     AND NOT EXISTS(SELECT 1 FROM appointments upcoming WHERE upcoming.shop_id=lv.shop_id AND upcoming.customer_id=lv.customer_id AND upcoming.status IN('BOOKED','CONFIRMED') AND upcoming.starts_at>NOW())
+  )
+  INSERT INTO shop_customer_reminders(shop_id,customer_id,appointment_id,channel,template_key,scheduled_at,dedupe_key)
+  SELECT d.shop_id,d.customer_id,d.appointment_id,c.channel,'REBOOKING_NUDGE',NOW(),
+    'rebook:'||d.shop_id||':'||d.customer_id||':'||d.appointment_id||':'||c.channel
+  FROM due d JOIN shop_message_consents c ON c.shop_id=d.shop_id AND c.customer_id=d.customer_id
+  JOIN shop_messaging_settings m ON m.shop_id=d.shop_id AND c.channel=ANY(m.enabled_channels)
+  JOIN shop_message_templates t ON t.shop_id=d.shop_id AND t.channel=c.channel AND t.template_key='REBOOKING_NUDGE' AND t.is_active=TRUE
+  JOIN users u ON u.id=c.customer_id
+  WHERE c.consent=TRUE AND c.revoked_at IS NULL
+    AND ((c.channel='EMAIL' AND c.destination=u.email) OR (c.channel IN('SMS','WHATSAPP') AND c.destination=u.phone))
+  ON CONFLICT(dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`);
+ await pool.query(`INSERT INTO shop_customer_reminders(shop_id,customer_id,appointment_id,channel,template_key,scheduled_at,dedupe_key)
+  SELECT a.shop_id,a.customer_id,a.id,c.channel,'REVIEW_REQUEST',NOW(),
+    'review:'||a.id||':'||c.channel
+  FROM appointments a JOIN shop_booking_policies bp ON bp.shop_id=a.shop_id AND bp.review_requests_enabled=TRUE
+  JOIN shop_message_consents c ON c.shop_id=a.shop_id AND c.customer_id=a.customer_id
+  JOIN shop_messaging_settings m ON m.shop_id=a.shop_id AND c.channel=ANY(m.enabled_channels)
+  JOIN shop_message_templates t ON t.shop_id=a.shop_id AND t.channel=c.channel AND t.template_key='REVIEW_REQUEST' AND t.is_active=TRUE
+  JOIN users u ON u.id=a.customer_id
+  WHERE a.status='COMPLETED' AND a.ends_at<=NOW()-INTERVAL '2 hours'
+    AND NOT EXISTS(SELECT 1 FROM shop_customer_feedback f WHERE f.appointment_id=a.id AND f.customer_id=a.customer_id)
+    AND c.channel='WHATSAPP' AND c.consent=TRUE AND c.revoked_at IS NULL AND c.destination=u.phone
+  ON CONFLICT(dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`);
+}
 async function run(){
  if(!process.env.DATABASE_URL)throw new Error('DATABASE_URL is required');
+ await refillExpiredWaitlistOffers();
+ await queueMissingAppointmentReminders();
+ await queueRebookingAndReviewNudges();
  const client=await pool.connect();let rows=[];
  try{
   await client.query('BEGIN');
   await client.query("UPDATE shop_customer_reminders SET status='PENDING',processing_at=NULL WHERE status='PROCESSING' AND processing_at<NOW()-INTERVAL '10 minutes'");
-  await client.query("UPDATE shop_waitlist_offers SET status='EXPIRED' WHERE status='OFFERED' AND expires_at<=NOW()");
-  await client.query("UPDATE shop_ai_booking_proposals SET status='EXPIRED' WHERE status='PROPOSED' AND expires_at<=NOW()");
-  await client.query("UPDATE shop_waitlist_entries SET status='WAITING',updated_at=NOW() WHERE status='OFFERED' AND id IN (SELECT waitlist_entry_id FROM shop_waitlist_offers WHERE status='EXPIRED')");
-  await client.query(`WITH visits AS (
-    SELECT shop_id,customer_id,starts_at,LAG(starts_at) OVER(PARTITION BY shop_id,customer_id ORDER BY starts_at) previous_visit
-    FROM appointments WHERE status='COMPLETED'
-  ), stats AS (
-    SELECT shop_id,customer_id,MAX(starts_at) last_visit,
-      ROUND(AVG(EXTRACT(EPOCH FROM (starts_at-previous_visit))/86400) FILTER(WHERE previous_visit IS NOT NULL))::int interval_days
-    FROM visits GROUP BY shop_id,customer_id
-  )
-  INSERT INTO shop_customer_rebooking_profiles(shop_id,customer_id,interval_days,last_visit_at,next_due_at,enabled,interval_source)
-  SELECT shop_id,customer_id,GREATEST(7,LEAST(365,COALESCE(interval_days,21))),last_visit,
-    last_visit+make_interval(days=>GREATEST(7,LEAST(365,COALESCE(interval_days,21)))),TRUE,'AUTO'
-  FROM stats
-  ON CONFLICT(shop_id,customer_id) DO UPDATE SET
-    interval_days=CASE WHEN shop_customer_rebooking_profiles.interval_source='MANUAL' THEN shop_customer_rebooking_profiles.interval_days ELSE EXCLUDED.interval_days END,
-    last_visit_at=EXCLUDED.last_visit_at,
-    next_due_at=EXCLUDED.last_visit_at+make_interval(days=>CASE WHEN shop_customer_rebooking_profiles.interval_source='MANUAL' THEN shop_customer_rebooking_profiles.interval_days ELSE EXCLUDED.interval_days END),
-    updated_at=NOW()`);
-  await client.query(`WITH due AS (
-    INSERT INTO shop_customer_reminders(shop_id,customer_id,channel,template_key,scheduled_at,related_entity_type)
-    SELECT p.shop_id,p.customer_id,c.channel,'REBOOKING_DUE',NOW(),'REBOOKING'
-    FROM shop_customer_rebooking_profiles p
-    JOIN shop_message_consents c ON c.shop_id=p.shop_id AND c.customer_id=p.customer_id
-    JOIN shop_messaging_settings m ON m.shop_id=p.shop_id AND c.channel=ANY(m.enabled_channels)
-    JOIN shop_message_templates t ON t.shop_id=p.shop_id AND t.channel=c.channel AND t.template_key='REBOOKING_DUE' AND t.is_active=TRUE
-    JOIN users u ON u.id=p.customer_id
-    WHERE p.enabled=TRUE AND p.next_due_at<=NOW() AND (p.last_nudge_at IS NULL OR p.last_nudge_at<p.next_due_at)
-      AND c.consent=TRUE AND c.revoked_at IS NULL
-      AND ((c.channel='EMAIL' AND c.destination=u.email) OR (c.channel IN ('SMS','WHATSAPP') AND c.destination=u.phone))
-      AND (c.channel<>'WHATSAPP' OR t.provider_template_status='APPROVED')
-    ON CONFLICT DO NOTHING RETURNING shop_id,customer_id
-  )
-  UPDATE shop_customer_rebooking_profiles p SET last_nudge_at=NOW(),updated_at=NOW()
-  FROM (SELECT DISTINCT shop_id,customer_id FROM due) d WHERE p.shop_id=d.shop_id AND p.customer_id=d.customer_id`);
-  const result=await client.query(`SELECT r.*,u.email,u.phone,u.phone_verified_at,u.name AS customer_name,sh.name AS shop_name,t.subject,t.body,m.email_provider,m.whatsapp_provider,m.sender_email,m.sender_name,m.sms_from,m.whatsapp_phone_number_id,m.enabled_channels,t.provider_template_name,t.provider_template_language,t.provider_template_status
-   FROM shop_customer_reminders r JOIN users u ON u.id=r.customer_id JOIN shops sh ON sh.id=r.shop_id
+  const result=await client.query(`SELECT r.*,u.email,u.phone,u.phone_verified_at,u.name AS customer_name,sh.name AS shop_name,sh.timezone AS shop_timezone,a.starts_at AS appointment_starts_at,sv.name AS service_name,t.subject,t.body,m.email_provider,m.whatsapp_provider,m.sender_email,m.sender_name,m.sms_from,m.whatsapp_phone_number_id,m.enabled_channels,t.provider_template_name,t.provider_template_language
+   FROM shop_customer_reminders r JOIN users u ON u.id=r.customer_id JOIN shops sh ON sh.id=r.shop_id LEFT JOIN appointments a ON a.id=r.appointment_id LEFT JOIN services sv ON sv.id=a.service_id
    JOIN shop_message_templates t ON t.shop_id=r.shop_id AND t.channel=r.channel AND t.template_key=r.template_key AND t.is_active=TRUE
    LEFT JOIN shop_messaging_settings m ON m.shop_id=r.shop_id
-   WHERE r.status='PENDING' AND r.channel IN ('EMAIL','SMS','WHATSAPP') AND r.scheduled_at<=NOW() AND (r.channel<>'WHATSAPP' OR t.provider_template_status='APPROVED')
-     AND (r.channel<>'SMS' OR $1::boolean)
-   ORDER BY r.scheduled_at,r.id LIMIT 25 FOR UPDATE OF r SKIP LOCKED`,[Boolean(process.env.TWILIO_SMS_DLT_ENTITY_ID&&process.env.TWILIO_SMS_DLT_TEMPLATE_ID)]);
-  rows=result.rows;for(const row of rows)await client.query("UPDATE shop_customer_reminders SET status='PROCESSING',processing_at=NOW() WHERE id=$1",[row.id]);
+   WHERE r.status='PENDING' AND r.channel IN ('EMAIL','SMS','WHATSAPP') AND r.scheduled_at<=NOW()
+   ORDER BY r.scheduled_at,r.id LIMIT 25 FOR UPDATE OF r SKIP LOCKED`);
+  rows=result.rows;for(const row of rows)await client.query("UPDATE shop_customer_reminders SET status='PROCESSING',processing_at=NOW(),attempt_count=attempt_count+1 WHERE id=$1",[row.id]);
   await client.query('COMMIT');
  }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
  for(const row of rows){
@@ -66,14 +95,24 @@ async function run(){
     const consent=await pool.query(`SELECT 1 FROM shop_message_consents WHERE shop_id=$1 AND customer_id=$2 AND channel=$3 AND destination=$4 AND consent=TRUE AND revoked_at IS NULL`,[row.shop_id,row.customer_id,row.channel,destination]);
     if(!consent.rowCount)throw Object.assign(new Error('No active consent for this channel'),{code:'CONSENT_REQUIRED'});
    }
-   const body=String(row.body).replace(/\{\{shop_name\}\}/g,row.shop_name).replace(/\{\{customer_name\}\}/g,row.customer_name).replace(/\{\{appointment_id\}\}/g,String(row.appointment_id||'')).replace(/\{\{offer_id\}\}/g,row.related_entity_type==='WAITLIST_OFFER'?String(row.related_entity_id||''):'').replace(/\{\{feedback_url\}\}/g,(process.env.APP_BASE_URL||'https://barberpro-ai-crm-cxm7.onrender.com')+'/app?view=customer');
-   const sent=await deliver(row.channel,destination,{subject:row.subject,body},process.env,global.fetch,{provider:row.whatsapp_provider,phoneNumberId:row.whatsapp_phone_number_id,from:row.channel==='SMS'?row.sms_from:row.channel==='EMAIL'?row.sender_email:null,templateName:row.provider_template_name,templateLanguage:row.provider_template_language,templateStatus:row.provider_template_status});
+   const rawTime=row.template_key==='WAITLIST_OFFER'?row.metadata?.offeredStartsAt:row.appointment_starts_at;
+   const locale=String(row.provider_template_language||'en_US').startsWith('hi')?'hi-IN':String(row.provider_template_language||'en_US').startsWith('mr')?'mr-IN':'en-IN';
+   const appointmentTime=rawTime?new Date(rawTime).toLocaleString(locale,{timeZone:row.shop_timezone||'Asia/Kolkata',dateStyle:'medium',timeStyle:'short'}):'';
+   const body=String(row.body).replace(/\{\{shop_name\}\}/g,row.shop_name).replace(/\{\{customer_name\}\}/g,row.customer_name).replace(/\{\{appointment_id\}\}/g,String(row.appointment_id||'')).replace(/\{\{waitlist_entry_id\}\}/g,String(row.metadata?.waitlistEntryId||'')).replace(/\{\{appointment_time\}\}/g,appointmentTime).replace(/\{\{service_name\}\}/g,row.service_name||'');
+   const templateValue=row.template_key==='WAITLIST_OFFER'?row.metadata?.waitlistEntryId:row.appointment_id;
+   const secondValue=['REBOOKING_NUDGE','REVIEW_REQUEST'].includes(row.template_key)?(row.service_name||''):appointmentTime;
+   const variables=templateValue==null?{}:{'1':String(templateValue),'2':String(secondValue),'3':String(row.shop_name||'')};
+   const sent=await deliver(row.channel,destination,{subject:row.subject,body,variables},process.env,global.fetch,{provider:row.whatsapp_provider,phoneNumberId:row.whatsapp_phone_number_id,from:row.channel==='SMS'?row.sms_from:row.channel==='EMAIL'?row.sender_email:null,templateName:row.provider_template_name,language:row.provider_template_language||'en_US'});
    await pool.query("UPDATE shop_customer_reminders SET status='SENT',sent_at=NOW(),processing_at=NULL,provider_reference=$2 WHERE id=$1",[row.id,sent.reference]);
    if(row.related_entity_type==='REVIEW_REQUEST')await pool.query("UPDATE shop_review_requests SET status='SENT' WHERE id=$1",[row.related_entity_id]);
    await pool.query("INSERT INTO shop_message_delivery_attempts(reminder_id,shop_id,channel,destination,provider,status,provider_reference) VALUES($1,$2,$3,$4,$5,'SENT',$6)",[row.id,row.shop_id,row.channel,destination,sent.provider,sent.reference]);
   }catch(e){
-   await pool.query("UPDATE shop_customer_reminders SET status='FAILED',processing_at=NULL WHERE id=$1",[row.id]);
-   if(row.related_entity_type==='REVIEW_REQUEST')await pool.query("UPDATE shop_review_requests SET status='FAILED' WHERE id=$1",[row.related_entity_id]);
+   const code=String(e.code||'DELIVERY_FAILED'),attempts=Number(row.attempt_count||0)+1;
+   const retryable=/^(429|500|502|503|504|ECONNRESET|ETIMEDOUT|EAI_AGAIN)$/.test(code);
+   const retry=retryable&&attempts<5;
+   await pool.query(`UPDATE shop_customer_reminders SET status=$2,processing_at=NULL,
+     scheduled_at=CASE WHEN $2='PENDING' THEN NOW()+make_interval(mins=>LEAST(60,5*$3)) ELSE scheduled_at END
+     WHERE id=$1`,[row.id,retry?'PENDING':'FAILED',attempts]);
    await pool.query("INSERT INTO shop_message_delivery_attempts(reminder_id,shop_id,channel,destination,provider,status,error_code) VALUES($1,$2,$3,$4,$5,'FAILED',$6)",[row.id,row.shop_id,row.channel,destination,row.channel==='EMAIL'?'RESEND':row.channel==='SMS'?'TWILIO':'META',String(e.code||'DELIVERY_FAILED').slice(0,80)]);
    console.error('Reminder delivery failed',row.id,e.message);
   }

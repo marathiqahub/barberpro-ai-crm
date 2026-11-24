@@ -19,7 +19,11 @@ function createReceptionistRouter(pool, options = {}) {
    if(!provider.ok)return res.status(provider.status===429?503:502).json({error:provider.status===429?'AI provider rate limit reached. Please try again shortly.':'The receptionist could not answer right now.'});
    const payload=await provider.json(),reply=payload.choices?.[0]?.message?.content;
    if(typeof reply!=='string'||!reply.trim())return res.status(502).json({error:'The receptionist returned an empty response.'});
-   return res.json({shopId,reply:reply.trim(),model:env.OPENAI_MODEL||'gpt-4o-mini'});
+   const bookingIntent=/\\b(book|booking|appointment|slot|reserve|schedule)\\b/i.test(String(req.body?.message||''));
+   return res.json({shopId,reply:reply.trim(),model:env.OPENAI_MODEL||'gpt-4o-mini',
+    bookingHandoff:bookingIntent?{availabilityEndpoint:'/api/ai/booking-assistant/'+shopId+'/availability',
+     catalogEndpoint:'/api/ai/booking-assistant/'+shopId+'/catalog',bookingWorkspaceUrl:'/app?view=customer',
+     requiresCustomerLogin:true,createsBooking:false,customerMustSelectSlotAndSubmit:true}:null});
   }catch(e){return next(e)}
  });
  return router;

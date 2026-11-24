@@ -1,7 +1,7 @@
 const express = require('express');
 const { createAuthMiddleware } = require('../auth/middleware');
 const { scheduleAppointmentReminders } = require('../messaging/reminders');
-const { offerNextWaitlist } = require('../retention/waitlist');
+const { offerWaitlistEntry } = require('./retentionRoutes');
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const ID_RE = /^[1-9]\d*$/;
@@ -289,11 +289,20 @@ function createBookingRouter(pool, tokenService) {
         await client.query('ROLLBACK');
         return res.status(409).json({ error: 'That appointment slot is unavailable. Refresh availability and choose another time.' });
       }
+      const policy = await client.query('SELECT deposit_enabled,deposit_type,deposit_value FROM shop_booking_policies WHERE shop_id=$1',[shopId]);
+      let depositDuePaise=0;
+      if(policy.rows[0]?.deposit_enabled){
+        const servicePaise=Math.round(Number(slot.rows[0].price)*100);
+        depositDuePaise=policy.rows[0].deposit_type==='PERCENT'
+          ? Math.round(servicePaise*Number(policy.rows[0].deposit_value)/10000)
+          : Number(policy.rows[0].deposit_value);
+        depositDuePaise=Math.min(servicePaise,depositDuePaise);
+      }
       const inserted = await client.query(
-        `INSERT INTO appointments (shop_id, staff_id, service_id, customer_id, starts_at, ends_at, customer_notes)
-         VALUES ($1,$2,$3,$4,$5,$5::timestamptz + make_interval(mins => $6),$7)
+        `INSERT INTO appointments (shop_id, staff_id, service_id, customer_id, starts_at, ends_at, customer_notes, deposit_due_paise)
+         VALUES ($1,$2,$3,$4,$5,$5::timestamptz + make_interval(mins => $6),$7,$8)
          RETURNING id, shop_id, staff_id, service_id, customer_id, starts_at, ends_at, status, customer_notes, created_at`,
-        [shopId, staffId, serviceId, req.user.id, new Date(startMs).toISOString(), slot.rows[0].duration_minutes, customerNotes]
+        [shopId, staffId, serviceId, req.user.id, new Date(startMs).toISOString(), slot.rows[0].duration_minutes, customerNotes, depositDuePaise]
       );
       const policy=await client.query('SELECT deposits_enabled,deposit_type,deposit_value FROM shop_appointment_policies WHERE shop_id=$1',[shopId]);
       let deposit=null;
@@ -319,7 +328,7 @@ function createBookingRouter(pool, tokenService) {
 
   router.get('/appointments/mine', ...signedIn, asyncRoute(async (req, res) => {
     const result = await pool.query(
-      `SELECT a.id, a.starts_at, a.ends_at, a.status, a.customer_notes,
+      `SELECT a.id, a.starts_at, a.ends_at, a.status, a.customer_notes, a.deposit_due_paise, a.deposit_paid_paise, a.no_show_fee_due_paise, a.no_show_fee_status,
               sh.id AS shop_id, sh.name AS shop_name, sh.address AS shop_address,
               sv.id AS service_id, sv.name AS service_name, sv.duration_minutes, sv.price,
               st.id AS staff_id, st.display_name AS staff_name
@@ -339,18 +348,16 @@ function createBookingRouter(pool, tokenService) {
       `UPDATE appointments SET status = 'CANCELLED', updated_at = NOW()
        WHERE id = $1 AND status IN ('BOOKED','CONFIRMED')
          AND starts_at > NOW()
-         AND (customer_id = $2 OR $3 = 'ADMIN')
-       RETURNING id, shop_id, service_id, staff_id, status, starts_at, ends_at`,
+         AND ($3 = 'ADMIN' OR (customer_id = $2 AND starts_at >= NOW() + make_interval(hours => COALESCE((SELECT cancellation_notice_hours FROM shop_booking_policies WHERE shop_id=appointments.shop_id),0))))
+       RETURNING id, shop_id, status, starts_at, ends_at`,
       [appointmentId, req.user.id, req.user.role]
     );
     if (!result.rowCount) return res.status(404).json({ error: 'Upcoming appointment not found or cannot be cancelled.' });
     try{await pool.query("UPDATE shop_customer_reminders SET status='CANCELLED',processing_at=NULL WHERE appointment_id=$1 AND status IN ('PENDING','PROCESSING')",[appointmentId]);}catch(error){if(error.code!=='42P01')throw error;}
-    await pool.query(`INSERT INTO appointment_extra_payments(appointment_id,customer_id,payment_type,amount_paise)
-      SELECT a.id,a.customer_id,'CANCELLATION_FEE',p.cancellation_fee_paise FROM appointments a JOIN shop_appointment_policies p ON p.shop_id=a.shop_id
-      WHERE a.id=$1 AND p.cancellation_fee_paise>0 AND a.starts_at<=NOW()+make_interval(hours=>p.cancellation_window_hours)
-      ON CONFLICT(appointment_id,payment_type) DO NOTHING`,[appointmentId]);
-    const waitlistOffer = await offerNextWaitlist(pool,result.rows[0]);
-    res.json({ appointment: result.rows[0], waitlistOffer });
+    let waitlistOffer = null;
+    try { waitlistOffer = await offerWaitlistEntry(pool, result.rows[0].shop_id, null, appointmentId); }
+    catch (error) { console.error('Waitlist auto-fill failed after cancellation', appointmentId, error.message); }
+    res.json({ appointment: result.rows[0], waitlistOfferQueued: Boolean(waitlistOffer) });
   }));
 
   return router;
