@@ -62,6 +62,8 @@ services:
         sync: false
       - key: META_APP_SECRET
         sync: false
+      - key: PRIVATE_MEDIA_HOSTS
+        sync: false
   - type: cron
     name: barberpro-reminder-delivery
     runtime: docker
