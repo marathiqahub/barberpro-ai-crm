@@ -204,10 +204,14 @@ function createOperationsRouter(pool, tokenService) {
 
   router.get('/front-desk/customers', ...frontDeskRoles, asyncRoute(async(req,res)=>{
     const q=typeof req.query.q==='string'?req.query.q.trim():'';
+    const shopId=id(req.query.shopId);
+    if(!shopId||!await shopAccess(req.user,shopId)) return res.status(404).json({error:'Shop not found.'});
     if(q.length<2||q.length>100) return res.status(400).json({error:'Search with at least 2 characters.'});
     const result=await pool.query(
       `SELECT id,name,email FROM users WHERE role='CUSTOMER' AND is_active=TRUE
-       AND (name ILIKE $1 OR email ILIKE $1) ORDER BY name LIMIT 20`,['%'+q+'%']);
+       AND (name ILIKE $1 OR email ILIKE $1)
+       AND EXISTS(SELECT 1 FROM appointments a WHERE a.customer_id=users.id AND a.shop_id=$2)
+       ORDER BY name LIMIT 20`,['%'+q+'%',shopId]);
     res.json({customers:result.rows});
   }));
 
@@ -251,6 +255,15 @@ function createOperationsRouter(pool, tokenService) {
         [shopId,staffId,serviceId,customerId]);
       if(!context.rowCount){await client.query('ROLLBACK');return res.status(400).json({error:'Customer, service or barber is not active for this shop.'});}
       const endsAt=new Date(startsAt.getTime()+Number(context.rows[0].duration_minutes)*60000);
+      const working=await client.query(
+        `SELECT 1 FROM staff_working_hours wh JOIN shop_staff st ON st.id=wh.staff_id
+         JOIN shops sh ON sh.id=st.shop_id
+         WHERE wh.staff_id=$1 AND wh.is_active=TRUE
+           AND wh.day_of_week=EXTRACT(DOW FROM ($2::timestamptz AT TIME ZONE sh.timezone))::int
+           AND ($2::timestamptz AT TIME ZONE sh.timezone)::time>=wh.opens_at
+           AND ($3::timestamptz AT TIME ZONE sh.timezone)::time<=wh.closes_at`,
+        [staffId,startsAt.toISOString(),endsAt.toISOString()]);
+      if(!working.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'Barber is outside their working hours.'});}
       const off=await client.query(
         'SELECT 1 FROM staff_time_off WHERE staff_id=$1 AND tstzrange(starts_at,ends_at,\'[)\') && tstzrange($2::timestamptz,$3::timestamptz,\'[)\')',
         [staffId,startsAt.toISOString(),endsAt.toISOString()]);
