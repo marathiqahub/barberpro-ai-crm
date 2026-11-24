@@ -69,7 +69,7 @@ function createAdvancedRouter(pool,tokenService){
  r.post('/appointments/:appointmentId/reference-photo',...customer,wrap(async(q,s)=>{
   const appointmentId=id(q.params.appointmentId),type=q.body?.contentType,data=q.body?.imageBase64;
   if(!appointmentId||q.body?.consent!==true||!['image/jpeg','image/png','image/webp'].includes(type)||typeof data!=='string')return s.status(400).json({error:'Appointment, supported image type, imageBase64 and explicit consent are required.'});
-  const encoded=data.replace(/^data:image\\/(?:jpeg|png|webp);base64,/i,'');
+  const encoded=data.replace(/^data:image\/(?:jpeg|png|webp);base64,/i,'');
   if(!/^[A-Za-z0-9+/]+={0,2}$/.test(encoded))return s.status(400).json({error:'Reference photo is not valid base64 data.'});
   const bytes=Buffer.from(encoded,'base64');
   if(!bytes.length||bytes.length>524288)return s.status(413).json({error:'Reference photos must be 512 KB or smaller.'});
