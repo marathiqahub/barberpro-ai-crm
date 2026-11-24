@@ -305,16 +305,16 @@ function createOperationsRouter(pool, tokenService) {
        COALESCE(SUM(i.sgst_paise),0)::bigint invoice_sgst_paise,
        COALESCE(SUM(i.igst_paise),0)::bigint invoice_igst_paise,
        COALESCE(SUM(i.total_paise),0)::bigint invoice_total_paise,
-       (SELECT COALESCE(SUM(c.taxable_paise),0)::bigint FROM sales_credit_notes c
-         WHERE c.shop_id=$1 AND c.issue_date BETWEEN $2::date AND $3::date) credit_taxable_paise,
-       (SELECT COALESCE(SUM(c.cgst_paise),0)::bigint FROM sales_credit_notes c
-         WHERE c.shop_id=$1 AND c.issue_date BETWEEN $2::date AND $3::date) credit_cgst_paise,
-       (SELECT COALESCE(SUM(c.sgst_paise),0)::bigint FROM sales_credit_notes c
-         WHERE c.shop_id=$1 AND c.issue_date BETWEEN $2::date AND $3::date) credit_sgst_paise,
-       (SELECT COALESCE(SUM(c.igst_paise),0)::bigint FROM sales_credit_notes c
-         WHERE c.shop_id=$1 AND c.issue_date BETWEEN $2::date AND $3::date) credit_igst_paise,
-       (SELECT COALESCE(SUM(c.total_paise),0)::bigint FROM sales_credit_notes c
-         WHERE c.shop_id=$1 AND c.issue_date BETWEEN $2::date AND $3::date) credit_total_paise
+       (SELECT COALESCE(SUM(c.taxable_paise),0)::bigint FROM sales_credit_notes c JOIN sales_invoices ci ON ci.id=c.invoice_id
+         WHERE ci.document_type='TAX_INVOICE' AND c.shop_id=$1 AND c.issue_date BETWEEN $2::date AND $3::date) credit_taxable_paise,
+       (SELECT COALESCE(SUM(c.cgst_paise),0)::bigint FROM sales_credit_notes c JOIN sales_invoices ci ON ci.id=c.invoice_id
+         WHERE ci.document_type='TAX_INVOICE' AND c.shop_id=$1 AND c.issue_date BETWEEN $2::date AND $3::date) credit_cgst_paise,
+       (SELECT COALESCE(SUM(c.sgst_paise),0)::bigint FROM sales_credit_notes c JOIN sales_invoices ci ON ci.id=c.invoice_id
+         WHERE ci.document_type='TAX_INVOICE' AND c.shop_id=$1 AND c.issue_date BETWEEN $2::date AND $3::date) credit_sgst_paise,
+       (SELECT COALESCE(SUM(c.igst_paise),0)::bigint FROM sales_credit_notes c JOIN sales_invoices ci ON ci.id=c.invoice_id
+         WHERE ci.document_type='TAX_INVOICE' AND c.shop_id=$1 AND c.issue_date BETWEEN $2::date AND $3::date) credit_igst_paise,
+       (SELECT COALESCE(SUM(c.total_paise),0)::bigint FROM sales_credit_notes c JOIN sales_invoices ci ON ci.id=c.invoice_id
+         WHERE ci.document_type='TAX_INVOICE' AND c.shop_id=$1 AND c.issue_date BETWEEN $2::date AND $3::date) credit_total_paise
        FROM sales_invoices i
        WHERE i.shop_id=$1 AND i.issue_date BETWEEN $2::date AND $3::date
          AND i.document_type='TAX_INVOICE' AND i.status='ISSUED'`,
