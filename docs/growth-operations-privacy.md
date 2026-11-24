@@ -11,13 +11,13 @@ New reminder template keys (create one active template per shop and channel):
 - `REBOOKING_NUDGE`
 - `REVIEW_REQUEST` (WhatsApp only; replies are routed by the webhook)
 
-For WhatsApp templates, configure the approved provider template name (Meta template name, or Twilio Content SID), and set the template language code (`en_US`, `hi`, `mr`, or a supported regional variant). The approved template should use one body variable for the reference number:
-- Appointment reminder: `{{1}}` is the appointment ID. Include instructions to reply `CONFIRM {{1}}` or `CANCEL {{1}}`.
-- Waitlist offer: `{{1}}` is the waitlist entry ID. Include instructions to reply `ACCEPT {{1}}` or `DECLINE {{1}}`; offers expire after 15 minutes.
-- Review request: `{{1}}` is the completed appointment ID. Ask the customer to reply `RATE 1 {{1}}` through `RATE 5 {{1}}`. Ratings 4–5 receive the configured Google review link; ratings 1–3 are stored as private shop feedback.
-- Rebooking nudge: `{{1}}` is the customer's most recent completed appointment reference.
+For WhatsApp templates, configure the approved provider template name (Meta template name, or Twilio Content SID), and set the template language code (`en_US`, `hi`, `mr`, or a supported regional variant). The approved template should use three body variables in this order:
+- Appointment reminder: `{{1}}` is the appointment ID, `{{2}}` is the local appointment date/time and `{{3}}` is the shop name. Include instructions to reply `CONFIRM {{1}}` or `CANCEL {{1}}`.
+- Waitlist offer: `{{1}}` is the waitlist entry ID, `{{2}}` is the offered local date/time and `{{3}}` is the shop name. Include instructions to reply `ACCEPT {{1}}` or `DECLINE {{1}}`; offers expire after 15 minutes.
+- Review request: `{{1}}` is the completed appointment ID, `{{2}}` is the service name and `{{3}}` is the shop name. Ask the customer to reply `RATE 1 {{1}}` through `RATE 5 {{1}}`. Ratings 4–5 receive the configured Google review link; ratings 1–3 are stored as private shop feedback.
+- Rebooking nudge: `{{1}}` is the customer's most recent completed appointment reference, `{{2}}` is the service name and `{{3}}` is the shop name.
 
-For SMS/email templates, use `{{shop_name}}`, `{{customer_name}}`, `{{appointment_id}}` and, for waitlist offers, `{{waitlist_entry_id}}` in the saved message body. Template body text for WhatsApp is managed and approved in Meta/Twilio; the app passes the reference as template parameter 1.
+For SMS/email templates, use `{{shop_name}}`, `{{customer_name}}`, `{{appointment_id}}` and, for waitlist offers, `{{waitlist_entry_id}}` in the saved message body. Template body text for WhatsApp is managed and approved in Meta/Twilio; the app passes the reference, local appointment time/service and shop name as template parameters 1–3.
 
 Reminders are queued only when the customer has active channel consent, the channel is enabled for the shop, the destination matches the verified account contact, and an active matching template exists. The worker also checks consent again at send time. Transient provider failures retry with bounded backoff (up to five attempts); configuration/template failures are surfaced in the admin Failed reminders panel and can be manually requeued after setup.
 

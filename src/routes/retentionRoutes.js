@@ -164,20 +164,26 @@ function createRetentionRouter(pool, tokens) {
   }));
 
   r.get('/customer/data-export',...customer,wrap(async(q,s)=>{
-    const [user,appointments,payments,consents,profiles,consentEvents,feedback,rights]=await Promise.all([
+    const [user,appointments,payments,consents,profiles,consentEvents,feedback,rights,reminders,waitlist]=await Promise.all([
       pool.query('SELECT id,name,email,phone,created_at FROM users WHERE id=$1',[q.user.id]),
-      pool.query(`SELECT a.id,a.shop_id,sh.name shop_name,a.starts_at,a.ends_at,a.status,a.customer_notes,sv.name service_name,st.display_name barber_name
+      pool.query(`SELECT a.id,a.shop_id,sh.name shop_name,a.starts_at,a.ends_at,a.status,a.customer_notes,a.deposit_due_paise,a.deposit_paid_paise,a.no_show_fee_due_paise,a.no_show_fee_status,sv.name service_name,st.display_name barber_name
         FROM appointments a JOIN shops sh ON sh.id=a.shop_id JOIN services sv ON sv.id=a.service_id JOIN shop_staff st ON st.id=a.staff_id
         WHERE a.customer_id=$1 ORDER BY a.starts_at DESC LIMIT 2000`,[q.user.id]),
-      pool.query('SELECT id,appointment_id,amount_paise,currency,status,payment_purpose,created_at FROM payments WHERE customer_id=$1 ORDER BY created_at DESC LIMIT 2000',[q.user.id]),
+      pool.query(`SELECT p.id,p.appointment_id,p.amount_paise,p.currency,p.status,p.payment_purpose,p.created_at,
+        COALESCE((SELECT SUM(r.amount_paise) FROM payment_refunds r WHERE r.payment_id=p.id AND r.status='PROCESSED'),0)::bigint refunded_amount_paise
+        FROM payments p WHERE p.customer_id=$1 ORDER BY p.created_at DESC LIMIT 2000`,[q.user.id]),
       pool.query('SELECT shop_id,channel,destination,consent,consented_at,revoked_at FROM shop_message_consents WHERE customer_id=$1 ORDER BY shop_id,channel',[q.user.id]),
       pool.query('SELECT shop_id,preferred_staff_id,preferred_service_id,preferred_interval_days,skin_notes,allergy_notes,photo_consent,photo_consent_at,before_photo_url,after_photo_url,notes FROM shop_customer_profiles WHERE customer_id=$1',[q.user.id]),
       pool.query('SELECT shop_id,purpose,channel,consent,notice_version,source,recorded_at FROM shop_customer_consent_events WHERE customer_id=$1 ORDER BY recorded_at',[q.user.id]),
       pool.query('SELECT shop_id,appointment_id,rating,comment,created_at FROM shop_customer_feedback WHERE customer_id=$1 ORDER BY created_at DESC',[q.user.id]),
-      pool.query('SELECT id,request_type,status,reason,requested_at,resolved_at FROM shop_data_rights_requests WHERE customer_id=$1 ORDER BY requested_at DESC',[q.user.id])
+      pool.query('SELECT id,request_type,status,reason,requested_at,resolved_at FROM shop_data_rights_requests WHERE customer_id=$1 ORDER BY requested_at DESC',[q.user.id]),
+      pool.query('SELECT shop_id,appointment_id,channel,template_key,status,scheduled_at,sent_at,created_at FROM shop_customer_reminders WHERE customer_id=$1 ORDER BY created_at DESC LIMIT 2000',[q.user.id]),
+      pool.query(`SELECT w.id,w.shop_id,sh.name shop_name,sv.name service_name,w.requested_date,w.status,w.offered_starts_at,w.offer_expires_at,w.created_at
+        FROM shop_waitlist_entries w JOIN shops sh ON sh.id=w.shop_id JOIN services sv ON sv.id=w.service_id
+        WHERE w.customer_id=$1 ORDER BY w.created_at DESC LIMIT 1000`,[q.user.id])
     ]);
     s.set('Content-Disposition','attachment; filename="barberpro-personal-data.json"');
-    s.json({exportedAt:new Date().toISOString(),account:user.rows[0]||null,appointments:appointments.rows,payments:payments.rows,consents:consents.rows,profiles:profiles.rows,consentEvents:consentEvents.rows,feedback:feedback.rows,rightsRequests:rights.rows});
+    s.json({exportedAt:new Date().toISOString(),account:user.rows[0]||null,appointments:appointments.rows,payments:payments.rows,consents:consents.rows,profiles:profiles.rows,consentEvents:consentEvents.rows,feedback:feedback.rows,rightsRequests:rights.rows,reminders:reminders.rows,waitlist:waitlist.rows});
   }));
   r.post('/customer/shops/:shopId/consent-events',...customer,wrap(async(q,s)=>{
     const shop=id(q.params.shopId),b=q.body||{};
