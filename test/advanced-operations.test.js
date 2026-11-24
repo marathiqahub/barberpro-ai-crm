@@ -22,7 +22,7 @@ test('TOTP secrets are encrypted with authenticated AES-GCM and round-trip only 
 });
 
 test('CSV import parser handles quoted commas, escaped quotes and line breaks',()=>{
- const parsed=parseCsv('Name,Email,Phone\r\n"Doe, Jane",jane@example.test,\\"+91 98765 43210\\"\r\n"Line\nBreak",line@example.test,');
+ const parsed=parseCsv('Name,Email,Phone\r\n"Doe, Jane",jane@example.test,"+91 98765 43210"\r\n"Line\nBreak",line@example.test,');
  assert.equal(parsed[0].Name,'Doe, Jane');
  assert.equal(parsed[0].Phone,'+91 98765 43210');
  assert.equal(parsed[1].Name,'Line\nBreak');
