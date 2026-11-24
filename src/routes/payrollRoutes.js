@@ -4,7 +4,7 @@ const {createAuthMiddleware}=require('../auth/middleware');
 const {calculatePayslip}=require('../payroll/calculator');
 function createPayrollRouter(pool,tokens){
  const r=express.Router(),{authenticate,requireRole}=createAuthMiddleware(pool,tokens),admin=[authenticate,requireRole('ADMIN')];
- const wrap=fn=>(q,s,n)=>Promise.resolve(fn(q,s)).catch(n),id=v=>/^[1-9]\\d*$/.test(String(v))?Number(v):null,date=v=>typeof v==='string'&&/^\\d{4}-\\d{2}-\\d{2}$/.test(v);
+ const wrap=fn=>(q,s,n)=>Promise.resolve(fn(q,s)).catch(n),id=v=>/^[1-9]\d*$/.test(String(v))?Number(v):null,date=v=>typeof v==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(v);
  r.put('/admin/shops/:shopId/staff/:staffId/payroll-profile',...admin,wrap(async(q,s)=>{
   const shop=id(q.params.shopId),staff=id(q.params.staffId),b=q.body||{};
   if(!shop||!staff||!['SALARIED','COMMISSION_ONLY'].includes(b.employmentType)||!date(b.effectiveFrom))return s.status(400).json({error:'Valid shop, staff, employmentType and effectiveFrom are required.'});
