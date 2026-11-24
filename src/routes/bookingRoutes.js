@@ -294,7 +294,7 @@ function createBookingRouter(pool, tokenService) {
          RETURNING id, shop_id, staff_id, service_id, customer_id, starts_at, ends_at, status, customer_notes, created_at`,
         [shopId, staffId, serviceId, req.user.id, new Date(startMs).toISOString(), slot.rows[0].duration_minutes, customerNotes]
       );
-      await scheduleAppointmentReminders(client,inserted.rows[0]);
+      await scheduleAppointmentReminders(client,inserted.rows[0],{transactional:true});
       await client.query('COMMIT');
       res.status(201).json({ appointment: inserted.rows[0] });
     } catch (error) {
