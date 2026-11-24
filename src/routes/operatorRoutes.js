@@ -116,7 +116,7 @@ function createOperatorRouter(pool) {
     const admin = body.admin || {};
     const shops = body.shops;
     const cleanPart = value => typeof value === 'string' ? value.trim() : '';
-    const emailPattern = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const validPerson = person => {
       const firstName = cleanPart(person?.firstName);
       const lastName = cleanPart(person?.lastName);
