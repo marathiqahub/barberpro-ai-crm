@@ -213,9 +213,12 @@ function createPaymentRouter(pool, tokenService) {
   }));
 
   router.get('/mine', ...signedIn, asyncRoute(async (req,res) => {
-    const result = await pool.query('SELECT p.id,p.appointment_id,p.amount_paise,p.currency,p.status,p.payment_purpose,p.created_at,
-      COALESCE((SELECT SUM(r.amount_paise) FROM payment_refunds r WHERE r.payment_id=p.id AND r.status='PROCESSED'),0)::bigint refunded_amount_paise
-      FROM payments p WHERE p.customer_id=$1 ORDER BY created_at DESC LIMIT 100',[req.user.id]);
+    const result = await pool.query(
+      `SELECT p.id,p.appointment_id,p.amount_paise,p.currency,p.status,p.payment_purpose,p.created_at,
+       COALESCE((SELECT SUM(r.amount_paise) FROM payment_refunds r WHERE r.payment_id=p.id AND r.status='PROCESSED'),0)::bigint refunded_amount_paise
+       FROM payments p WHERE p.customer_id=$1 ORDER BY p.created_at DESC LIMIT 100`,
+      [req.user.id]
+    );
     res.json({ payments: result.rows });
   }));
   router.get('/reconciliation', ...admin, asyncRoute(async (req,res) => {
