@@ -21,6 +21,7 @@ test('demo customer profiles are isolated from real customer accounts and consen
  assert.match(worker,/rp\.enabled=TRUE/);
  assert.doesNotMatch(migration,/INSERT INTO (users|shop_customer_profiles|shop_message_consents|shop_customer_consent_events)/i);
  assert.match(routes,/\/admin\/shops\/:shopId\/demo-customer-profiles/);
+ assert.match(routes,/const activeShop=await pool\.query/);
 });
 
 test('customer preferences endpoint returns persisted values and neutral consent defaults',()=>{
@@ -33,5 +34,6 @@ test('customer preferences endpoint returns persisted values and neutral consent
  assert.match(ui,/elements\.marketing\.checked=!!consents\.marketing/);
  assert.match(ui,/elements\.whatsapp\.checked=!!consents\.whatsapp/);
  assert.match(ui,/elements\.sms\.checked=!!consents\.sms/);
+ assert.match(ui,/consents\.profileNotes\?\(profile\.skin_notes/);
  assert.match(ui,/name="enabled"/);
 });
