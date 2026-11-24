@@ -226,7 +226,7 @@ CREATE TABLE IF NOT EXISTS shop_data_rights_requests (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS data_rights_requests_idx
-  ON shop_data_rights_requests(shop_id,status,created_at);
+  ON shop_data_rights_requests(shop_id,status,requested_at);
 
 CREATE TABLE IF NOT EXISTS shop_ai_booking_proposals (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
