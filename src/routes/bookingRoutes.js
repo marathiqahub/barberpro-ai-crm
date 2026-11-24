@@ -334,7 +334,7 @@ function createBookingRouter(pool, tokenService) {
     const result = await pool.query(
       `SELECT a.id, a.starts_at, a.ends_at, a.status, a.customer_notes, a.deposit_due_paise, a.deposit_paid_paise, a.no_show_fee_due_paise, a.no_show_fee_status,
               sh.id AS shop_id, sh.name AS shop_name, sh.address AS shop_address,
-              sv.id AS service_id, sv.name AS service_name, sv.duration_minutes, sv.price,
+              sv.id AS service_id, sv.name AS service_name, sv.duration_minutes, sv.price, sv.chemical_consent_required,
               st.id AS staff_id, st.display_name AS staff_name
        FROM appointments a JOIN shops sh ON sh.id = a.shop_id
        JOIN services sv ON sv.id = a.service_id
