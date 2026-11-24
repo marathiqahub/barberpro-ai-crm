@@ -294,6 +294,7 @@ function createRetentionRouter(pool, tokens) {
 
   r.get('/admin/shops/:shopId/demo-customer-profiles',...admin,wrap(async(q,s)=>{
     const shop=id(q.params.shopId);if(!shop)return s.status(400).json({error:'Invalid shop id.'});
+    const activeShop=await pool.query('SELECT 1 FROM shops WHERE id=$1 AND is_active=TRUE',[shop]);if(!activeShop.rowCount)return s.status(404).json({error:'Active shop not found.'});
     const seeds=[
       ['DEMO-001','Demo Customer Asha (SAMPLE)','Sample barber preference','Classic haircut','Synthetic sample notes: prefers a neat, low-maintenance style.'],
       ['DEMO-002','Demo Customer Rohan (SAMPLE)','No preference','Beard trim','Synthetic sample notes: asks for a tidy beard outline.'],

@@ -31,7 +31,7 @@ async function customerTools(){
    if(profile.preferred_staff_id&&!catalog.staff.some(x=>Number(x.id)===Number(profile.preferred_staff_id))){const o=document.createElement('option');o.value=profile.preferred_staff_id;o.textContent=(profile.preferred_staff_name||'Previously selected barber')+' (currently unavailable)';staff.append(o)}
    if(profile.preferred_service_id&&!catalog.services.some(x=>Number(x.id)===Number(profile.preferred_service_id))){const o=document.createElement('option');o.value=profile.preferred_service_id;o.textContent=(profile.preferred_service_name||'Previously selected service')+' (currently unavailable)';service.append(o)}
    staff.value=profile.preferred_staff_id||'';service.value=profile.preferred_service_id||'';
-   $('#bp-pref').elements.skinNotes.value=profile.skin_notes||profile.notes||profile.care_notes||'';$('#bp-pref').elements.allergyNotes.value=profile.allergy_notes||'';
+   $('#bp-pref').elements.skinNotes.value=consents.profileNotes?(profile.skin_notes||profile.notes||profile.care_notes||''):'';$('#bp-pref').elements.allergyNotes.value=consents.profileNotes?(profile.allergy_notes||''):'';
    $('#bp-pref').elements.profileNotes.checked=!!consents.profileNotes;$('#bp-pref').elements.photo.checked=!!consents.photoStorage;
    $('#bp-pref').elements.marketing.checked=!!consents.marketing;$('#bp-pref').elements.whatsapp.checked=!!consents.whatsapp;$('#bp-pref').elements.sms.checked=!!consents.sms;
    const whatsappDestination=messaging.WHATSAPP?.destination||customerSettings.contact?.phone,smsDestination=messaging.SMS?.destination||customerSettings.contact?.phone;
