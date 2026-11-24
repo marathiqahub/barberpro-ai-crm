@@ -21,7 +21,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
   try {
     const migrationsDir = path.join(__dirname, '..', 'db', 'migrations');
     const migrations = fs.readdirSync(migrationsDir)
-      .filter((file) => /^\\d+_.*\\.sql$/.test(file))
+      .filter((file) => /^\d+_.*\.sql$/.test(file))
       .sort();
     for (const migration of migrations) {
       const sql = fs.readFileSync(path.join(migrationsDir, migration), 'utf8');
