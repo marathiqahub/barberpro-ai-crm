@@ -54,6 +54,9 @@ function createCrmRouter(pool, tokenService) {
         consent_updated_at=NOW(),notes=EXCLUDED.notes,updated_at=NOW()
        RETURNING shop_id,customer_id,marketing_email_consent,marketing_sms_consent,consent_updated_at,notes`,
       [shopId,customerId,b.marketingEmailConsent,b.marketingSmsConsent,b.notes??null]);
+    await pool.query(`INSERT INTO shop_customer_consent_events(shop_id,customer_id,purpose,channel,consent,notice_version,source)
+      VALUES($1,$2,'MARKETING','EMAIL',$3,'v1','ADMIN_CRM'),($1,$2,'MARKETING','SMS',$4,'v1','ADMIN_CRM')`,
+      [shopId,customerId,b.marketingEmailConsent,b.marketingSmsConsent]);
     res.json({profile:result.rows[0]});
   }));
 

@@ -3,6 +3,7 @@ const argon2 = require('argon2');
 const crypto = require('node:crypto');
 const { createAuthMiddleware } = require('../auth/middleware');
 const { commissionForTaxableAmount, expectedCash, validateTenderAllocations } = require('../financial/calculations');
+const { offerWaitlistEntry } = require('./retentionRoutes');
 
 function createOperationsRouter(pool, tokenService) {
   const router = express.Router();
@@ -102,18 +103,31 @@ function createOperationsRouter(pool, tokenService) {
          FROM shops s LEFT JOIN shop_tax_profiles t ON t.shop_id=s.id WHERE s.id=$1 AND s.is_active=TRUE FOR UPDATE OF s`,[shopId]);
       if(!shop.rowCount){await client.query('ROLLBACK');return res.status(404).json({error:'Active shop not found.'});}
       const profile=shop.rows[0], date=b.issueDate, fy=financialYear(date);
+      const dayClose=await client.query('SELECT id FROM shop_daily_closures WHERE shop_id=$1 AND business_date=$2',[shopId,date]);
+      if(dayClose.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'This business day is already closed. Reopen it through the authorized close-review process before issuing another invoice.'});}
       const docType=profile.gst_registered?'TAX_INVOICE':'BILL_OF_SUPPLY';
       const place=typeof b.placeOfSupplyStateCode==='string' && /^\d{2}$/.test(b.placeOfSupplyStateCode)?b.placeOfSupplyStateCode:null;
       if(profile.gst_registered && !place){await client.query('ROLLBACK');return res.status(400).json({error:'Place of supply state code is required for a GST tax invoice.'});}
       let subtotal=0,discount=0,taxable=0,cgst=0,sgst=0,igst=0;
       const lines=[];
       for(const item of b.items){
-        const qty=Number(item.quantity),price=Number(item.unitPricePaise),disc=Number(item.discountPaise||0),rate=profile.gst_registered?Number(item.taxRateBps||0):0;
-        if(typeof item.description!=='string'||!item.description.trim()||!Number.isFinite(qty)||qty<=0||qty>10000||
-           !Number.isSafeInteger(price)||price<0||!Number.isSafeInteger(disc)||disc<0||!Number.isInteger(rate)||rate<0||rate>10000||
+        const qty=Number(item.quantity),inventoryItemId=item.inventoryItemId===undefined||item.inventoryItemId===null||item.inventoryItemId===''?null:id(item.inventoryItemId);
+        let price=Number(item.unitPricePaise),description=typeof item.description==='string'?item.description.trim():'';
+        const disc=Number(item.discountPaise||0),rate=profile.gst_registered?Number(item.taxRateBps||0):0;
+        if((item.inventoryItemId!==undefined&&item.inventoryItemId!==null&&item.inventoryItemId!==''&&!inventoryItemId)||
+           (!inventoryItemId&&!description)||!Number.isFinite(qty)||qty<=0||qty>10000||
+           !Number.isSafeInteger(disc)||disc<0||!Number.isInteger(rate)||rate<0||rate>10000||
            (item.hsnSacCode && !/^[A-Za-z0-9]{4,8}$/.test(item.hsnSacCode))) {
           await client.query('ROLLBACK');return res.status(400).json({error:'Each item needs a description, valid quantity, unit price, discount, tax rate and optional HSN/SAC code.'});
         }
+        if(inventoryItemId){
+          if(item.serviceId!==undefined&&item.serviceId!==null&&item.serviceId!==''){await client.query('ROLLBACK');return res.status(400).json({error:'A retail product line cannot also reference a service.'});}
+          const product=await client.query('SELECT id,name,quantity,retail_price_paise FROM shop_inventory_items WHERE id=$1 AND shop_id=$2 AND is_active=TRUE FOR UPDATE',[inventoryItemId,shopId]);
+          if(!product.rowCount){await client.query('ROLLBACK');return res.status(400).json({error:'Retail product must be active in this shop.'});}
+          if(Number(product.rows[0].quantity)<qty){await client.query('ROLLBACK');return res.status(409).json({error:'Insufficient retail stock for '+product.rows[0].name+'.'});}
+          price=Number(product.rows[0].retail_price_paise);description=product.rows[0].name;
+        }
+        if(!Number.isSafeInteger(price)||price<0||(inventoryItemId&&price<1)){await client.query('ROLLBACK');return res.status(400).json({error:'Each item needs a valid unit price or a retail product with a configured selling price.'});}
         const gross=Math.round(qty*price);
         if(disc>gross){await client.query('ROLLBACK');return res.status(400).json({error:'Line discount cannot exceed its gross amount.'});}
         const base=gross-disc, tax=Math.round(base*rate/10000);
@@ -130,7 +144,7 @@ function createOperationsRouter(pool, tokenService) {
         if(item.serviceId!==undefined&&item.serviceId!==null&&item.serviceId!==''&&!serviceId){await client.query('ROLLBACK');return res.status(400).json({error:'Invalid service catalogue reference.'});}
         if(serviceId){const svc=await client.query('SELECT id FROM services WHERE id=$1 AND shop_id=$2 AND is_active=TRUE',[serviceId,shopId]);if(!svc.rowCount){await client.query('ROLLBACK');return res.status(400).json({error:'Invoice service must be active in this shop.'});}}
         const tip=Number(item.tipPaise||0);if(!Number.isSafeInteger(tip)||tip<0||tip>10000000){await client.query('ROLLBACK');return res.status(400).json({error:'Tip must be a non-negative whole amount in paise.'});}
-        const line={description:item.description.trim(),hsn:item.hsnSacCode||null,quantity:qty,price,discount:disc,rate,base,cgst:intra?Math.floor(tax/2):0,sgst:intra?tax-Math.floor(tax/2):0,igst:profile.gst_registered&&!intra?tax:0,total:base+tax,staffId,commissionRate,commission:commissionForTaxableAmount(base,commissionRate),serviceId,tip};
+        const line={description,hsn:item.hsnSacCode||null,quantity:qty,price,discount:disc,rate,base,cgst:intra?Math.floor(tax/2):0,sgst:intra?tax-Math.floor(tax/2):0,igst:profile.gst_registered&&!intra?tax:0,total:base+tax,staffId,commissionRate,commission:commissionForTaxableAmount(base,commissionRate),serviceId,inventoryItemId,tip};
         subtotal+=gross;discount+=disc;taxable+=base;cgst+=line.cgst;sgst+=line.sgst;igst+=line.igst;lines.push(line);
       }
       const total=taxable+cgst+sgst+igst, paid=b.amountPaidPaise||0;
@@ -145,10 +159,19 @@ function createOperationsRouter(pool, tokenService) {
         [shopId,invoiceNumber,fy,docType,date,profile.gstin,profile.legal_name,profile.trade_name,profile.address,profile.state_code,b.customerName.trim(),b.customerEmail||null,b.customerPhone||null,b.customerGstin||null,place,subtotal,discount,taxable,cgst,sgst,igst,total,paid,mode,req.user.id]);
       const invoice=inserted.rows[0];
       for(const line of lines) await client.query(
-        `INSERT INTO sales_invoice_lines (invoice_id,description,hsn_sac_code,quantity,unit_price_paise,discount_paise,tax_rate_bps,taxable_paise,cgst_paise,sgst_paise,igst_paise,total_paise,staff_id,commission_rate_bps,commission_paise,service_id,tip_paise)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)`,
-        [invoice.id,line.description,line.hsn,line.quantity,line.price,line.discount,line.rate,line.base,line.cgst,line.sgst,line.igst,line.total,line.staffId,line.commissionRate,line.commission,line.serviceId,line.tip]);
-      for(const line of lines){if(!line.serviceId)continue;const recipe=await client.query('SELECT item_id,quantity_per_service FROM shop_service_inventory_recipes WHERE shop_id=$1 AND service_id=$2 AND is_active=TRUE ORDER BY item_id',[shopId,line.serviceId]);for(const part of recipe.rows){const consume=Number((Number(part.quantity_per_service)*line.quantity).toFixed(3));const stock=await client.query('UPDATE shop_inventory_items SET quantity=quantity-$3,updated_at=NOW() WHERE id=$1 AND shop_id=$2 AND is_active=TRUE AND quantity >= $3 RETURNING quantity',[part.item_id,shopId,consume]);if(!stock.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'Insufficient stock to complete this invoice service.'});}await client.query(`INSERT INTO shop_stock_movements(shop_id,item_id,movement_type,quantity_delta,unit_cost_paise,reference,note,created_by) SELECT $1,$2,'CONSUMPTION',$3,unit_cost_paise,$4,$5,$6 FROM shop_inventory_items WHERE id=$2 AND shop_id=$1`,[shopId,part.item_id,-consume,'invoice:'+invoice.id,'Automatic service consumption',req.user.id]);}}
+        `INSERT INTO sales_invoice_lines (invoice_id,description,hsn_sac_code,quantity,unit_price_paise,discount_paise,tax_rate_bps,taxable_paise,cgst_paise,sgst_paise,igst_paise,total_paise,staff_id,commission_rate_bps,commission_paise,service_id,tip_paise,inventory_item_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)`,
+        [invoice.id,line.description,line.hsn,line.quantity,line.price,line.discount,line.rate,line.base,line.cgst,line.sgst,line.igst,line.total,line.staffId,line.commissionRate,line.commission,line.serviceId,line.tip,line.inventoryItemId]);
+      for(const line of lines){
+        if(line.inventoryItemId){
+          const stock=await client.query('UPDATE shop_inventory_items SET quantity=quantity-$3,updated_at=NOW() WHERE id=$1 AND shop_id=$2 AND is_active=TRUE AND quantity >= $3 RETURNING unit_cost_paise',[line.inventoryItemId,shopId,line.quantity]);
+          if(!stock.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'Retail product stock changed before checkout. Refresh and try again.'});}
+          await client.query(`INSERT INTO shop_stock_movements(shop_id,item_id,movement_type,quantity_delta,unit_cost_paise,note,created_by)
+            VALUES($1,$2,'CONSUMPTION',$3,$4,$5,$6)`,
+            [shopId,line.inventoryItemId,-line.quantity,stock.rows[0].unit_cost_paise,'Retail sale invoice '+invoice.rows[0].invoice_number,req.user.id]);
+          continue;
+        }
+        if(!line.serviceId)continue;const recipe=await client.query('SELECT item_id,quantity_per_service FROM shop_service_inventory_recipes WHERE shop_id=$1 AND service_id=$2 AND is_active=TRUE ORDER BY item_id',[shopId,line.serviceId]);for(const part of recipe.rows){const consume=Number((Number(part.quantity_per_service)*line.quantity).toFixed(3));const stock=await client.query('UPDATE shop_inventory_items SET quantity=quantity-$3,updated_at=NOW() WHERE id=$1 AND shop_id=$2 AND is_active=TRUE AND quantity >= $3 RETURNING quantity',[part.item_id,shopId,consume]);if(!stock.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'Insufficient stock to complete this invoice service.'});}await client.query(`INSERT INTO shop_stock_movements(shop_id,item_id,movement_type,quantity_delta,unit_cost_paise,reference,note,created_by) SELECT $1,$2,'CONSUMPTION',$3,unit_cost_paise,$4,$5,$6 FROM shop_inventory_items WHERE id=$2 AND shop_id=$1`,[shopId,part.item_id,-consume,'invoice:'+invoice.id,'Automatic service consumption',req.user.id]);}}
       const allocations=Array.isArray(b.paymentBreakdown)?b.paymentBreakdown:[];
       if(allocations.length){
         const methods=['CASH','UPI','CARD','RAZORPAY'];
@@ -234,6 +257,13 @@ function createOperationsRouter(pool, tokenService) {
        GROUP BY st.id,st.display_name ORDER BY commission_paise DESC,st.display_name`,
       [shopId,from,to]);
     res.json({shopId,from,to,staffEarnings:result.rows});
+  }));
+
+  router.get('/front-desk/shops/:shopId/retail-products',...frontDesk,asyncRoute(async(req,res)=>{
+    const shopId=id(req.params.shopId);if(!shopId||!await shopAccess(req.user,shopId))return res.status(404).json({error:'Shop not found.'});
+    const result=await pool.query(`SELECT id,sku,name,unit,quantity,reorder_level,retail_price_paise
+      FROM shop_inventory_items WHERE shop_id=$1 AND is_active=TRUE ORDER BY name`,[shopId]);
+    res.json({products:result.rows});
   }));
 
   router.post('/shops/:shopId/daily-close', ...frontDesk, asyncRoute(async(req,res)=>{
@@ -470,12 +500,19 @@ function createOperationsRouter(pool, tokenService) {
     if(!appointmentId||!shopId||!Object.hasOwn(allowed,req.body?.fromStatus)||!allowed[req.body.fromStatus].includes(nextStatus))
       return res.status(400).json({error:'Invalid appointment status transition.'});
     if(!await shopAccess(req.user,shopId)) return res.status(404).json({error:'Shop not found.'});
+    if(nextStatus==='CONFIRMED'){
+      const deposit=await pool.query('SELECT deposit_due_paise,deposit_paid_paise FROM appointments WHERE id=$1 AND shop_id=$2',[appointmentId,shopId]);
+      if(deposit.rowCount&&Number(deposit.rows[0].deposit_due_paise)>Number(deposit.rows[0].deposit_paid_paise))
+        return res.status(409).json({error:'The booking deposit must be paid before confirming this appointment.'});
+    }
     const client=await pool.connect();
     try{
       await client.query('BEGIN');
       const updated=await client.query(
-        `UPDATE appointments SET status=$3,updated_at=NOW()
-         WHERE id=$1 AND shop_id=$2 AND status=$4 RETURNING *`,
+        `UPDATE appointments SET status=$3,
+         no_show_fee_due_paise=CASE WHEN $3='NO_SHOW' THEN COALESCE((SELECT no_show_fee_paise FROM shop_booking_policies WHERE shop_id=$2),0) ELSE no_show_fee_due_paise END,
+         no_show_fee_status=CASE WHEN $3='NO_SHOW' AND COALESCE((SELECT no_show_fee_paise FROM shop_booking_policies WHERE shop_id=$2),0)>0 THEN 'DUE' WHEN $3='NO_SHOW' THEN 'NOT_DUE' ELSE no_show_fee_status END,
+         updated_at=NOW() WHERE id=$1 AND shop_id=$2 AND status=$4 RETURNING *`,
         [appointmentId,shopId,nextStatus,req.body.fromStatus]);
       if(!updated.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'Appointment not found or its status changed. Refresh the calendar and try again.'});}
       await client.query(
@@ -483,7 +520,10 @@ function createOperationsRouter(pool, tokenService) {
          VALUES($1,$2,$3,'STATUS_CHANGED',$4,$5)`,
         [appointmentId,shopId,req.user.id,req.body.fromStatus,nextStatus]);
       await client.query('COMMIT');
-      res.json({appointment:updated.rows[0]});
+      if(['CANCELLED','NO_SHOW'].includes(nextStatus))await pool.query("UPDATE shop_customer_reminders SET status='CANCELLED',processing_at=NULL WHERE appointment_id=$1 AND template_key IN('APPOINTMENT_REMINDER_24H','APPOINTMENT_REMINDER_2H') AND status IN('PENDING','PROCESSING')",[appointmentId]);
+      let waitlistOfferQueued=false;
+      if(nextStatus==='CANCELLED'){try{waitlistOfferQueued=Boolean(await offerWaitlistEntry(pool,shopId,null,appointmentId))}catch(e){console.error('Front-desk waitlist auto-fill failed',appointmentId,e.message)}}
+      res.json({appointment:updated.rows[0],waitlistOfferQueued});
     }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
   }));
 

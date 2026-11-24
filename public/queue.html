@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#141414"><title>BarberPro — Live Queue</title>
+<link rel="stylesheet" href="/palette.css">
+<style>
+:root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#141414;color:#f7f4ee;font:16px/1.5 system-ui,sans-serif}
+header{display:flex;justify-content:space-between;align-items:center;padding:22px 4vw;border-bottom:1px solid #383838}
+.brand{font-weight:800;letter-spacing:.04em}.brand em{color:#c9a227;font-style:normal}
+main{max-width:1200px;margin:0 auto;padding:4vw}.eyebrow{color:#c9a227;letter-spacing:.18em;font-size:.8rem;font-weight:700}
+h1{font-size:clamp(2.2rem,5vw,4.5rem);margin:.2em 0 1rem}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:24px}.panel{background:#202020;border:1px solid #444;border-radius:18px;padding:24px;min-height:280px}
+h2{margin:0 0 18px;font-size:1.2rem;color:#c9a227}.ticket{display:flex;justify-content:space-between;gap:12px;align-items:center;border-bottom:1px solid #393939;padding:16px 0}
+.ticket:last-child{border:0}.number{font-size:2rem;font-weight:800}.service{font-weight:650}.muted{color:#aaa;font-size:.9rem}.empty{padding:35px 0;color:#aaa}
+#status{color:#aaa;font-size:.85rem;margin-top:20px}
+@media(max-width:700px){.grid{grid-template-columns:1fr}.panel{min-height:180px}}
+</style></head>
+<body>
+<header><div class="brand">✂ BARBERPRO <em>LIVE QUEUE</em></div><div id="shop-name">Live updates</div></header>
+<main><p class="eyebrow">YOUR TURN IS GETTING CLOSER</p><h1>Now serving</h1>
+<div class="grid"><section class="panel"><h2>NOW SERVING</h2><div id="serving" class="empty">Loading queue…</div></section>
+<section class="panel"><h2>NEXT UP</h2><div id="next" class="empty">Loading queue…</div></section></div>
+<p id="status" aria-live="polite">Refreshing every 5 seconds</p></main>
+<script>
+(()=>{'use strict';const shopId=location.pathname.split('/').filter(Boolean).pop();const serving=document.getElementById('serving'),next=document.getElementById('next'),status=document.getElementById('status');
+const node=(parent,item)=>{const row=document.createElement('div');row.className='ticket';const left=document.createElement('div');const n=document.createElement('div');n.className='number';n.textContent=item.ticket;const svc=document.createElement('div');svc.className='service';svc.textContent=item.service||'Appointment';const barber=document.createElement('div');barber.className='muted';barber.textContent=item.barber||'';left.append(n,svc,barber);row.append(left);parent.append(row)};
+async function refresh(){try{const response=await fetch('/api/public/shops/'+encodeURIComponent(shopId)+'/queue',{cache:'no-store'});if(!response.ok)throw Error('Queue is not available');const data=await response.json();serving.replaceChildren();next.replaceChildren();(data.nowServing||[]).forEach(x=>node(serving,x));(data.nextUp||[]).forEach(x=>node(next,x));if(!serving.children.length)serving.textContent='No appointment is being served right now.';if(!next.children.length)next.textContent='No customers are waiting.';status.textContent='Last updated '+new Date().toLocaleTimeString()}catch(e){status.textContent=e.message}}
+refresh();setInterval(refresh,5000)})();
+</script></body></html>
