@@ -21,6 +21,7 @@ test('demo customer profiles are isolated from real customer accounts and consen
 
 test('customer preferences endpoint returns persisted values and neutral consent defaults',()=>{
  assert.match(routes,/\/customer\/shops\/:shopId\/preferences/);
+ assert.match(routes,/messaging:byChannel/);
  assert.match(routes,/marketing:byPurpose\.MARKETING\?\?false/);
  assert.match(routes,/whatsapp:!!byChannel\.WHATSAPP\?\.consent/);
  assert.match(routes,/sms:!!byChannel\.SMS\?\.consent/);

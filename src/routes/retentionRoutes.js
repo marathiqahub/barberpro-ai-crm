@@ -153,7 +153,7 @@ function createRetentionRouter(pool, tokens) {
     ]);
     const p=profile.rows[0]||null,byPurpose=Object.fromEntries(events.rows.map(x=>[x.purpose,x.consent]));
     const byChannel=Object.fromEntries(messaging.rows.map(x=>[x.channel,{consent:x.consent&&!x.revoked_at,destination:x.destination}]));
-    s.set('Cache-Control','no-store').json({profile:p,contact:contact.rows[0]||{},rebooking:rebooking.rows[0]||{interval_days:21,enabled:false},consents:{
+    s.set('Cache-Control','no-store').json({profile:p,contact:contact.rows[0]||{},messaging:byChannel,rebooking:rebooking.rows[0]||{interval_days:21,enabled:false},consents:{
       profileNotes:!!p?.profile_notes_consent,photoStorage:byPurpose.PHOTO_STORAGE??!!p?.photo_consent,
       marketing:byPurpose.MARKETING??false,whatsapp:!!byChannel.WHATSAPP?.consent,sms:!!byChannel.SMS?.consent
     }});

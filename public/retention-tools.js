@@ -17,22 +17,26 @@ async function customerTools(){
  '<div class="panel"><h3>My data rights</h3><button id="bp-export">Download my data</button> <button id="bp-erase">Request data erasure</button><p id="bp-data-note"></p></div>';
  book.closest('.panel').after(host);
  let customerSettings={contact:{},consents:{}};
+ const syncNoteInputs=()=>{const allowed=$('#bp-pref').elements.profileNotes.checked;$('#bp-pref').elements.skinNotes.disabled=!allowed;$('#bp-pref').elements.allergyNotes.disabled=!allowed};
+ $('#bp-pref').elements.profileNotes.addEventListener('change',syncNoteInputs);
  async function load(){
   const id=shop.value;
   try{
    const results=await Promise.all([api('/customer/shops/'+id+'/catalog'),api('/customer/shops/'+id+'/appointment-policy'),api('/customer/shops/'+id+'/preferences')]);
    const catalog=results[0],p=results[1].policy;customerSettings=results[2];
-   const profile=customerSettings.profile||{},consents=customerSettings.consents||{};
+   const profile=customerSettings.profile||{},consents=customerSettings.consents||{},messaging=customerSettings.messaging||{};
    const staff=$('#bp-pref').elements.staff,service=$('#bp-pref').elements.service;
    staff.innerHTML='<option value="">Not set — no preference</option>'+catalog.staff.map(x=>'<option value="'+x.id+'">'+esc(x.display_name)+'</option>').join('');
    service.innerHTML='<option value="">Not set — no preference</option>'+catalog.services.map(x=>'<option value="'+x.id+'">'+esc(x.name)+'</option>').join('');
    if(profile.preferred_staff_id&&!catalog.staff.some(x=>Number(x.id)===Number(profile.preferred_staff_id))){const o=document.createElement('option');o.value=profile.preferred_staff_id;o.textContent=(profile.preferred_staff_name||'Previously selected barber')+' (currently unavailable)';staff.append(o)}
    if(profile.preferred_service_id&&!catalog.services.some(x=>Number(x.id)===Number(profile.preferred_service_id))){const o=document.createElement('option');o.value=profile.preferred_service_id;o.textContent=(profile.preferred_service_name||'Previously selected service')+' (currently unavailable)';service.append(o)}
    staff.value=profile.preferred_staff_id||'';service.value=profile.preferred_service_id||'';
-   $('#bp-pref').elements.skinNotes.value=profile.skin_notes||'';$('#bp-pref').elements.allergyNotes.value=profile.allergy_notes||'';
+   $('#bp-pref').elements.skinNotes.value=profile.skin_notes||profile.notes||profile.care_notes||'';$('#bp-pref').elements.allergyNotes.value=profile.allergy_notes||'';
    $('#bp-pref').elements.profileNotes.checked=!!consents.profileNotes;$('#bp-pref').elements.photo.checked=!!consents.photoStorage;
    $('#bp-pref').elements.marketing.checked=!!consents.marketing;$('#bp-pref').elements.whatsapp.checked=!!consents.whatsapp;$('#bp-pref').elements.sms.checked=!!consents.sms;
-   $('#bp-pref').elements.whatsapp.disabled=!customerSettings.contact?.phone;$('#bp-pref').elements.sms.disabled=!customerSettings.contact?.phone;
+   const whatsappDestination=messaging.WHATSAPP?.destination||customerSettings.contact?.phone,smsDestination=messaging.SMS?.destination||customerSettings.contact?.phone;
+   $('#bp-pref').elements.whatsapp.disabled=!whatsappDestination;$('#bp-pref').elements.sms.disabled=!smsDestination;
+   $('#bp-pref').elements.skinNotes.disabled=!consents.profileNotes;$('#bp-pref').elements.allergyNotes.disabled=!consents.profileNotes;
    $('#bp-wait').elements.service.innerHTML=catalog.services.map(x=>'<option value="'+x.id+'">'+esc(x.name)+'</option>').join('');
    const rb=customerSettings.rebooking||{};$('#bp-rebook').elements.days.value=rb.interval_days||21;$('#bp-rebook').elements.enabled.checked=!!rb.enabled;
    $('#bp-policy').textContent=(p.deposits_enabled?'Deposit: '+(p.deposit_type==='FIXED'?'₹'+(Number(p.deposit_value)/100).toFixed(2):p.deposit_value+'%')+'. ':'No deposit required. ')+'Cancellation window '+p.cancellation_window_hours+' hours; cancellation fee ₹'+(Number(p.cancellation_fee_paise||0)/100).toFixed(2)+'; no-show fee ₹'+(Number(p.no_show_fee_paise||0)/100).toFixed(2)+'.';
@@ -40,10 +44,11 @@ async function customerTools(){
  }
  shop.addEventListener('change',load);load();
  $('#bp-pref').onsubmit=async e=>{e.preventDefault();const f=new FormData(e.target);try{
-  await api('/customer/shops/'+shop.value+'/preferences',{method:'PUT',body:JSON.stringify({preferredStaffId:f.get('staff')?Number(f.get('staff')):null,preferredServiceId:f.get('service')?Number(f.get('service')):null,skinNotes:f.get('skinNotes'),allergyNotes:f.get('allergyNotes'),profileNotesConsent:f.has('profileNotes'),photoConsent:f.has('photo'),noticeVersion:'2026-11-v1'})});
+  await api('/customer/shops/'+shop.value+'/preferences',{method:'PUT',body:JSON.stringify({preferredStaffId:f.get('staff')?Number(f.get('staff')):null,preferredServiceId:f.get('service')?Number(f.get('service')):null,skinNotes:f.has('profileNotes')?f.get('skinNotes'):null,allergyNotes:f.has('profileNotes')?f.get('allergyNotes'):null,profileNotesConsent:f.has('profileNotes'),photoConsent:f.has('photo'),noticeVersion:'2026-11-v1'})});
   await api('/customer/shops/'+shop.value+'/consent-events',{method:'POST',body:JSON.stringify({purpose:'MARKETING',consent:f.has('marketing'),noticeVersion:'2026-11-v1'})});
-  const phone=customerSettings.contact?.phone;
-  if(phone){await api('/customer/shops/'+shop.value+'/message-consent',{method:'POST',body:JSON.stringify({channel:'WHATSAPP',destination:phone,consent:f.has('whatsapp')})});await api('/customer/shops/'+shop.value+'/message-consent',{method:'POST',body:JSON.stringify({channel:'SMS',destination:phone,consent:f.has('sms')})});}
+  const whatsappDestination=customerSettings.messaging?.WHATSAPP?.destination||customerSettings.contact?.phone,smsDestination=customerSettings.messaging?.SMS?.destination||customerSettings.contact?.phone;
+  if(whatsappDestination)await api('/customer/shops/'+shop.value+'/message-consent',{method:'POST',body:JSON.stringify({channel:'WHATSAPP',destination:whatsappDestination,consent:f.has('whatsapp')})});
+  if(smsDestination)await api('/customer/shops/'+shop.value+'/message-consent',{method:'POST',body:JSON.stringify({channel:'SMS',destination:smsDestination,consent:f.has('sms')})});
   note($('#bp-pref-note'),'Preferences and privacy choices saved.');await load();
  }catch(x){note($('#bp-pref-note'),x.message,true)}};
  $('#bp-offers-load').onclick=async()=>{try{const d=await api('/customer/waitlist-offers');$('#bp-offers').innerHTML=d.offers.map(o=>'<div class="item"><strong>'+esc(o.shop_name)+' · '+esc(o.service_name)+'</strong><small>'+new Date(o.starts_at).toLocaleString()+' · '+esc(o.display_name)+' · expires '+new Date(o.expires_at).toLocaleTimeString()+'</small><button data-accept-offer="'+o.id+'">Accept slot</button></div>').join('')||'<div class="empty">No active slot offers.</div>';$('#bp-offers').querySelectorAll('[data-accept-offer]').forEach(b=>b.onclick=async()=>{try{const a=await api('/customer/waitlist-offers/'+b.dataset.acceptOffer+'/accept',{method:'POST',body:'{}'});note($('#bp-wait-note'),'Slot accepted. Booking request #'+a.appointment.id+' created.');$('#bp-offers-load').click()}catch(x){note($('#bp-wait-note'),x.message,true)}})}catch(x){note($('#bp-offers'),x.message,true)}};
