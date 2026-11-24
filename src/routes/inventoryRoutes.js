@@ -22,13 +22,13 @@ function createInventoryRouter(pool,tokenService){
   const shopId=id(req.params.shopId),b=req.body||{};
   if(!shopId||typeof b.sku!=='string'||!b.sku.trim()||b.sku.length>64||typeof b.name!=='string'||!b.name.trim()||b.name.length>160||
    typeof (b.unit||'piece')!=='string'||(b.unit||'piece').length>24||
-   !Number.isFinite(b.reorderLevel??0)||(b.reorderLevel??0)<0||!Number.isSafeInteger(b.unitCostPaise??0)||(b.unitCostPaise??0)<0)
+   !Number.isFinite(b.reorderLevel??0)||(b.reorderLevel??0)<0||!Number.isSafeInteger(b.unitCostPaise??0)||(b.unitCostPaise??0)<0||!Number.isSafeInteger(b.retailPricePaise??0)||(b.retailPricePaise??0)<0)
    return res.status(400).json({error:'Provide valid SKU, item name, unit, reorder level and unit cost.'});
   if(!await validShop(shopId))return res.status(404).json({error:'Active shop not found.'});
   try{
-   const r=await pool.query(`INSERT INTO shop_inventory_items(shop_id,sku,name,description,unit,reorder_level,unit_cost_paise)
-    VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
-    [shopId,b.sku.trim(),b.name.trim(),b.description||null,b.unit||'piece',b.reorderLevel??0,b.unitCostPaise??0]);
+   const r=await pool.query(`INSERT INTO shop_inventory_items(shop_id,sku,name,description,unit,reorder_level,unit_cost_paise,retail_price_paise)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *`,
+    [shopId,b.sku.trim(),b.name.trim(),b.description||null,b.unit||'piece',b.reorderLevel??0,b.unitCostPaise??0,b.retailPricePaise??0]);
    res.status(201).json({item:r.rows[0]});
   }catch(e){if(e.code==='23505')return res.status(409).json({error:'SKU already exists for this shop.'});throw e;}
  }));
@@ -44,6 +44,20 @@ function createInventoryRouter(pool,tokenService){
    VALUES($1,$2,$3,$4,$5,$6,$7) RETURNING *`,
    [shopId,b.name.trim(),b.contactName||null,b.email||null,b.phone||null,b.gstin||null,b.address||null]);
   res.status(201).json({supplier:r.rows[0]});
+ }));
+ router.get('/admin/shops/:shopId/inventory/retail-products',...admin,asyncRoute(async(req,res)=>{
+  const shopId=id(req.params.shopId);if(!shopId)return res.status(400).json({error:'Invalid shop id.'});
+  const r=await pool.query(`SELECT id,sku,name,unit,quantity,reorder_level,unit_cost_paise,retail_price_paise,
+    (quantity<=reorder_level) low_stock FROM shop_inventory_items WHERE shop_id=$1 AND is_active=TRUE ORDER BY name`,[shopId]);
+  res.json({products:r.rows});
+ }));
+ router.put('/admin/shops/:shopId/inventory/items/:itemId/retail-price',...admin,asyncRoute(async(req,res)=>{
+  const shopId=id(req.params.shopId),itemId=id(req.params.itemId),price=req.body?.retailPricePaise;
+  if(!shopId||!itemId||!Number.isSafeInteger(price)||price<0)return res.status(400).json({error:'Provide a non-negative retail price in paise.'});
+  const r=await pool.query(`UPDATE shop_inventory_items SET retail_price_paise=$3,updated_at=NOW()
+    WHERE id=$1 AND shop_id=$2 AND is_active=TRUE RETURNING id,sku,name,quantity,retail_price_paise`,[itemId,shopId,price]);
+  if(!r.rowCount)return res.status(404).json({error:'Active retail product not found.'});
+  res.json({product:r.rows[0]});
  }));
  router.post('/admin/shops/:shopId/inventory/adjustments',...admin,asyncRoute(async(req,res)=>{
   const shopId=id(req.params.shopId),b=req.body||{},itemId=id(b.itemId),delta=b.quantityDelta;
