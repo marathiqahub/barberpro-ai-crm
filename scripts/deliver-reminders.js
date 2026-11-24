@@ -22,7 +22,8 @@ async function run(){
   let destination=row.channel==='EMAIL'?row.email:row.phone;
   try{
    if(!row.enabled_channels?.includes(row.channel))throw Object.assign(new Error('This channel is not enabled for the shop'),{code:'CHANNEL_DISABLED'});
-   if(row.channel!=='EMAIL'&&!row.phone_verified_at)throw Object.assign(new Error('Customer phone number is not verified'),{code:'PHONE_NOT_VERIFIED'});\n   if(!destination)throw Object.assign(new Error('Customer has no destination for this channel'),{code:'NO_DESTINATION'});
+   if(row.channel!=='EMAIL'&&!row.phone_verified_at)throw Object.assign(new Error('Customer phone number is not verified'),{code:'PHONE_NOT_VERIFIED'});
+   if(!destination)throw Object.assign(new Error('Customer has no destination for this channel'),{code:'NO_DESTINATION'});
    {
     const consent=await pool.query(`SELECT 1 FROM shop_message_consents WHERE shop_id=$1 AND customer_id=$2 AND channel=$3 AND destination=$4 AND consent=TRUE AND revoked_at IS NULL`,[row.shop_id,row.customer_id,row.channel,destination]);
     if(!consent.rowCount)throw Object.assign(new Error('No active consent for this channel'),{code:'CONSENT_REQUIRED'});
