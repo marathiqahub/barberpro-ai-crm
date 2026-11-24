@@ -1,7 +1,7 @@
 (()=>{'use strict';
 const $=s=>document.querySelector(s);
 function mount(){if(!$('#book')||$('#bp-assistant'))return;const host=document.createElement('section');host.id='bp-assistant';host.className='panel';host.innerHTML='<h2>✦ AI booking assistant</h2><p class="muted">Ask for a service and available time, then confirm your booking.</p><div id="bp-chat" class="list" aria-live="polite"><div class="item">Hello! I can help you find a service and request a booking.</div></div><div class="rowform"><label>Message<input id="bp-chat-input" maxlength="300" placeholder="e.g. Show haircut services"></label><button id="bp-chat-send" class="primary" type="button">Send</button></div><div id="bp-chat-actions" class="list"></div>';$('#book').closest('.panel').after(host);
- const chat=$('#bp-chat'),actions=$('#bp-chat-actions'),input=$('#bp-chat-input'),send=$('#bp-chat-send');let services=[],slots=[];
+ const chat=$('#bp-chat'),actions=$('#bp-chat-actions'),input=$('#bp-chat-input'),send=$('#bp-chat-send');let services=[],slots=[],conversation=[];
  const say=(text,who='assistant')=>{const d=document.createElement('div');d.className='item';d.textContent=(who==='user'?'You: ':'Assistant: ')+text;chat.appendChild(d)};
  const api=async(path,opts={})=>{const token=localStorage.getItem('bp_access');const r=await fetch('/api'+path,{...opts,headers:{'Content-Type':'application/json',Authorization:'Bearer '+token,...opts.headers}});const d=await r.json();if(!r.ok)throw Error(d.error||'Request failed');return d};
  async function handle(){const text=input.value.trim();if(!text)return;input.value='';say(text,'user');const shop=Number($('#book').shopId.value);try{
