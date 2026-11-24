@@ -200,3 +200,8 @@ ALTER TABLE shop_customer_rebooking_profiles
 ALTER TABLE shop_stock_movements DROP CONSTRAINT IF EXISTS shop_stock_movements_movement_type_check;
 ALTER TABLE shop_stock_movements ADD CONSTRAINT shop_stock_movements_movement_type_check
   CHECK (movement_type IN ('OPENING','PURCHASE','ADJUSTMENT','CONSUMPTION','RETURN','SALE'));
+
+ALTER TABLE shop_inventory_items
+  ADD COLUMN IF NOT EXISTS retail_hsn_sac_code VARCHAR(8),
+  ADD COLUMN IF NOT EXISTS retail_tax_rate_bps INTEGER NOT NULL DEFAULT 0
+    CHECK (retail_tax_rate_bps BETWEEN 0 AND 10000);
