@@ -211,7 +211,7 @@ async function offerWaitlistEntry(db,shopId,entryId,cancelledAppointmentId) {
       AND status='WAITING' AND (preferred_staff_id IS NULL OR preferred_staff_id=$5)
       AND (preferred_time_start IS NULL OR ($4::timestamptz AT TIME ZONE (SELECT timezone FROM shops WHERE id=$2))::time>=preferred_time_start)
       AND (preferred_time_end IS NULL OR ($4::timestamptz AT TIME ZONE (SELECT timezone FROM shops WHERE id=$2))::time<preferred_time_end)
-      ORDER BY created_at FOR UPDATE SKIP LOCKED LIMIT 1`,[entryId,shopId,a.service_id,a.starts_at,a.staff_id]);
+      ORDER BY created_at LIMIT 1 FOR UPDATE SKIP LOCKED`,[entryId,shopId,a.service_id,a.starts_at,a.staff_id]);
     if(!w.rowCount){await c.query('ROLLBACK');return null;}
     const updated=await c.query(`UPDATE shop_waitlist_entries SET status='OFFERED',offered_staff_id=$2,offered_starts_at=$3,offered_ends_at=$4,
       offer_expires_at=NOW()+INTERVAL '15 minutes',updated_at=NOW() WHERE id=$1 RETURNING *`,[w.rows[0].id,a.staff_id,a.starts_at,a.ends_at]);
