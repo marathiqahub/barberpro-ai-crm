@@ -39,7 +39,8 @@ function createAuthController(pool, authConfig) {
     if (normalizedEmail.length > 254 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
       errors.email = 'A valid email address is required.';
     }
-    if (phone !== null && phone !== '' && (typeof phone !== 'string' || phone.length > 30 || !/^[+\\d().\\-\\s]{7,30}$/.test(phone.trim()))) errors.phone = 'Provide a valid phone number.';\n    if (typeof password !== 'string' || password.length < 12 || password.length > 128) {
+    if (phone !== null && phone !== '' && (typeof phone !== 'string' || phone.length > 30 || !/^[+\\d().\\-\\s]{7,30}$/.test(phone.trim()))) errors.phone = 'Provide a valid phone number.';
+    if (typeof password !== 'string' || password.length < 12 || password.length > 128) {
       errors.password = 'Password must be between 12 and 128 characters.';
     }
     if (Object.keys(errors).length) {
