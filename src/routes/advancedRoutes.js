@@ -350,7 +350,7 @@ function createAdvancedRouter(pool,tokenService){
     provider_template_language=EXCLUDED.provider_template_language,provider_template_status=EXCLUDED.provider_template_status,
     provider_approval_reference=EXCLUDED.provider_approval_reference,updated_by=EXCLUDED.updated_by,updated_at=NOW()
    RETURNING id,shop_id,channel,template_key,locale,provider_template_name,provider_template_language,provider_template_status`,
-   [shopId,b.channel,key,locale,b.subject||null,b.body,b.providerTemplateName||null,b.providerTemplateLanguage||locale,b.providerTemplateStatus||status,b.providerApprovalReference||null,q.user.id]);
+   [shopId,b.channel,key,locale,b.subject||null,b.body,b.providerTemplateName||null,b.providerTemplateLanguage||locale,status,b.providerApprovalReference||null,q.user.id]);
   s.json({translation:out.rows[0]});
  }));
  return r;
