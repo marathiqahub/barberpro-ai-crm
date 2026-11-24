@@ -126,7 +126,11 @@ function createOperationsRouter(pool, tokenService) {
           if(!staff.rowCount){await client.query('ROLLBACK');return res.status(400).json({error:'Invoice barber must be active at this shop.'});}
           commissionRate=Number(staff.rows[0].commission_rate_bps);
         }
-        const serviceId=item.serviceId===undefined||item.serviceId===null||item.serviceId===''?null:id(item.serviceId);\n        if(item.serviceId!==undefined&&item.serviceId!==null&&item.serviceId!==''&&!serviceId){await client.query('ROLLBACK');return res.status(400).json({error:'Invalid service catalogue reference.'});}\n        if(serviceId){const svc=await client.query('SELECT id FROM services WHERE id=$1 AND shop_id=$2 AND is_active=TRUE',[serviceId,shopId]);if(!svc.rowCount){await client.query('ROLLBACK');return res.status(400).json({error:'Invoice service must be active in this shop.'});}}\n        const tip=Number(item.tipPaise||0);if(!Number.isSafeInteger(tip)||tip<0||tip>10000000){await client.query('ROLLBACK');return res.status(400).json({error:'Tip must be a non-negative whole amount in paise.'});}\n        const line={description:item.description.trim(),hsn:item.hsnSacCode||null,quantity:qty,price,discount:disc,rate,base,cgst:intra?Math.floor(tax/2):0,sgst:intra?tax-Math.floor(tax/2):0,igst:profile.gst_registered&&!intra?tax:0,total:base+tax,staffId,commissionRate,commission:commissionForTaxableAmount(base,commissionRate),serviceId,tip};
+        const serviceId=item.serviceId===undefined||item.serviceId===null||item.serviceId===''?null:id(item.serviceId);
+        if(item.serviceId!==undefined&&item.serviceId!==null&&item.serviceId!==''&&!serviceId){await client.query('ROLLBACK');return res.status(400).json({error:'Invalid service catalogue reference.'});}
+        if(serviceId){const svc=await client.query('SELECT id FROM services WHERE id=$1 AND shop_id=$2 AND is_active=TRUE',[serviceId,shopId]);if(!svc.rowCount){await client.query('ROLLBACK');return res.status(400).json({error:'Invoice service must be active in this shop.'});}}
+        const tip=Number(item.tipPaise||0);if(!Number.isSafeInteger(tip)||tip<0||tip>10000000){await client.query('ROLLBACK');return res.status(400).json({error:'Tip must be a non-negative whole amount in paise.'});}
+        const line={description:item.description.trim(),hsn:item.hsnSacCode||null,quantity:qty,price,discount:disc,rate,base,cgst:intra?Math.floor(tax/2):0,sgst:intra?tax-Math.floor(tax/2):0,igst:profile.gst_registered&&!intra?tax:0,total:base+tax,staffId,commissionRate,commission:commissionForTaxableAmount(base,commissionRate),serviceId,tip};
         subtotal+=gross;discount+=disc;taxable+=base;cgst+=line.cgst;sgst+=line.sgst;igst+=line.igst;lines.push(line);
       }
       const total=taxable+cgst+sgst+igst, paid=b.amountPaidPaise||0;
@@ -351,8 +355,7 @@ function createOperationsRouter(pool, tokenService) {
     const header=['Document kind','Document number','Date','Document type','Customer','Customer GSTIN','Place of supply state code','HSN/SAC','Description','Quantity','Tax rate (basis points)','Taxable value (paise)','CGST (paise)','SGST (paise)','IGST (paise)','Total (paise)'];
     const lines=[header,...docs.rows.map(r=>[r.document_kind,r.document_number,r.issue_date,r.document_type,r.customer_name,r.customer_gstin,r.place_of_supply_state_code,r.hsn_sac_code,r.description,r.quantity,r.tax_rate_bps,r.taxable_paise,r.cgst_paise,r.sgst_paise,r.igst_paise,r.total_paise])];
     res.set('Content-Type','text/csv; charset=utf-8');res.set('Content-Disposition',`attachment; filename="barberpro-gst-sales-register-${from}-to-${to}.csv"`);
-    res.send('\uFEFF'+lines.map(row=>row.map(csv).join(',')).join('\\r
-'));
+    res.send('\uFEFF'+lines.map(row=>row.map(csv).join(',')).join('\\r\\n'));
   }));
 
   // Phase 1: shop-scoped front-desk calendar and walk-in operations.
