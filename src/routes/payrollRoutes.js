@@ -45,6 +45,7 @@ function createPayrollRouter(pool,tokens){
   const shop=id(q.params.shopId),run=id(q.params.runId);const out=await pool.query("UPDATE shop_payroll_runs SET status='APPROVED',approved_by=$3,approved_at=NOW() WHERE id=$2 AND shop_id=$1 AND status='DRAFT' RETURNING *",[shop,run,q.user.id]);
   if(!out.rowCount)return s.status(409).json({error:'Draft payroll run not found.'});s.json({payrollRun:out.rows[0]});
  }));
+ r.post('/admin/shops/:shopId/payroll-runs/:runId/mark-paid',...admin,wrap(async(q,s)=>{const shop=id(q.params.shopId),run=id(q.params.runId);const out=await pool.query(\"UPDATE shop_payroll_runs SET status='PAID',paid_at=NOW() WHERE id=$2 AND shop_id=$1 AND status='APPROVED' RETURNING *\",[shop,run]);if(!out.rowCount)return s.status(409).json({error:'Approved payroll run not found.'});s.json({payrollRun:out.rows[0],message:'Marked paid for record keeping. No bank transfer was initiated.'})}));
  return r;
 }
 module.exports={createPayrollRouter};
