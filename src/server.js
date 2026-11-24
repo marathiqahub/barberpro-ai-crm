@@ -20,6 +20,7 @@ const { createMessagingRouter } = require('./routes/messagingRoutes');
 const { createBookingAssistantRouter } = require('./routes/bookingAssistantRoutes');
 const { createWhatsAppRouter } = require('./routes/whatsappRoutes');
 const { createRetentionRouter } = require('./routes/retentionRoutes');
+const { createAdvancedRouter } = require('./routes/advancedRoutes');
 const { loadAuthConfig } = require('./auth/config');
 const { createTokenService } = require('./auth/tokens');
 const { Pool } = require('pg');
@@ -48,7 +49,7 @@ app.use(helmet({ contentSecurityPolicy: { directives: { scriptSrc: ["'self'", 'h
 const bookingTokens = createTokenService(loadAuthConfig());
 const paymentRouter = createPaymentRouter(pool, bookingTokens);
 app.use('/api/payments', (req, res, next) => req.path === '/webhook' ? paymentRouter(req, res, next) : next()); // raw webhook only before express.json
-app.use(express.json({ limit: '1mb', verify: (req, res, buffer) => { req.rawBody = Buffer.from(buffer); } }));
+app.use(express.json({ limit: '6mb', verify: (req, res, buffer) => { req.rawBody = Buffer.from(buffer); } }));
 
 app.get('/health/live', (req, res) => res.status(200).json({ status: 'ok' }));
 app.get('/health/ready', async (req, res) => {
@@ -84,6 +85,7 @@ app.use('/api', createMessagingRouter(pool, bookingTokens));
 app.use('/api', createBookingAssistantRouter(pool, bookingTokens));
 app.use('/api', createWhatsAppRouter(pool));
 app.use('/api', createRetentionRouter(pool, bookingTokens));
+app.use('/api', createAdvancedRouter(pool, bookingTokens));
 app.use('/api/payments', paymentRouter);
 app.use('/api/marketing', createMarketingRouter(pool, bookingTokens));
 
