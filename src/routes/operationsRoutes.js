@@ -169,6 +169,88 @@ function createOperationsRouter(pool, tokenService) {
     } catch(error){await client.query('ROLLBACK');throw error;} finally{client.release();}
   }));
 
+
+  router.get('/shops/:shopId/invoices', ...frontDesk, asyncRoute(async(req,res)=>{
+    const shopId=id(req.params.shopId),from=req.query.from,to=req.query.to;
+    if(!shopId||!validDate(from)||!validDate(to)||from>to||
+       (new Date(to+'T00:00:00Z')-new Date(from+'T00:00:00Z'))/86400000>366)
+      return res.status(400).json({error:'Provide a valid shop and date range of at most one year.'});
+    if(!await shopAccess(req.user,shopId))return res.status(404).json({error:'Shop not found.'});
+    const result=await pool.query(
+      `SELECT i.id,i.invoice_number,i.document_type,i.issue_date,i.customer_name,i.subtotal_paise,
+       i.discount_paise,i.taxable_paise,i.cgst_paise,i.sgst_paise,i.igst_paise,i.total_paise,
+       i.amount_paid_paise,i.payment_mode,i.status,
+       COALESCE((SELECT SUM(p.amount_paise) FROM sales_invoice_payments p WHERE p.invoice_id=i.id),0)::bigint allocated_paid_paise
+       FROM sales_invoices i WHERE i.shop_id=$1 AND i.issue_date BETWEEN $2::date AND $3::date
+       ORDER BY i.issue_date DESC,i.id DESC LIMIT 1000`,[shopId,from,to]);
+    res.json({invoices:result.rows});
+  }));
+
+  router.get('/invoices/:invoiceId', ...frontDesk, asyncRoute(async(req,res)=>{
+    const invoiceId=id(req.params.invoiceId);
+    if(!invoiceId)return res.status(400).json({error:'Invalid invoice ID.'});
+    const result=await pool.query('SELECT * FROM sales_invoices WHERE id=$1',[invoiceId]);
+    if(!result.rowCount||!await shopAccess(req.user,Number(result.rows[0].shop_id)))return res.status(404).json({error:'Invoice not found.'});
+    const [lines,payments,credits]=await Promise.all([
+      pool.query('SELECT * FROM sales_invoice_lines WHERE invoice_id=$1 ORDER BY id',[invoiceId]),
+      pool.query('SELECT method,amount_paise,reference,received_at FROM sales_invoice_payments WHERE invoice_id=$1 ORDER BY id',[invoiceId]),
+      pool.query('SELECT * FROM sales_credit_notes WHERE invoice_id=$1 ORDER BY issue_date,id',[invoiceId])
+    ]);
+    res.json({invoice:result.rows[0],lines:lines.rows,payments:payments.rows,creditNotes:credits.rows});
+  }));
+
+  router.get('/admin/shops/:shopId/staff-earnings', ...admin, asyncRoute(async(req,res)=>{
+    const shopId=id(req.params.shopId),from=req.query.from,to=req.query.to;
+    if(!shopId||!validDate(from)||!validDate(to)||from>to)return res.status(400).json({error:'Provide a valid shop and date range.'});
+    const result=await pool.query(
+      `SELECT st.id staff_id,st.display_name,
+       COUNT(DISTINCT i.id)::int invoice_count,
+       COALESCE(SUM(l.taxable_paise),0)::bigint service_sales_paise,
+       COALESCE(SUM(l.commission_paise),0)::bigint commission_paise
+       FROM sales_invoice_lines l JOIN sales_invoices i ON i.id=l.invoice_id
+       JOIN shop_staff st ON st.id=l.staff_id
+       WHERE i.shop_id=$1 AND st.shop_id=$1 AND i.issue_date BETWEEN $2::date AND $3::date
+         AND i.status='ISSUED'
+       GROUP BY st.id,st.display_name ORDER BY commission_paise DESC,st.display_name`,
+      [shopId,from,to]);
+    res.json({shopId,from,to,staffEarnings:result.rows});
+  }));
+
+  router.post('/shops/:shopId/daily-close', ...frontDesk, asyncRoute(async(req,res)=>{
+    const shopId=id(req.params.shopId),b=req.body||{},date=b.businessDate;
+    const amounts=['openingFloatPaise','cashRefundsPaise','cashPaidOutPaise','cashDepositedPaise','cashCountedPaise'];
+    if(!shopId||!validDate(date)||amounts.some(k=>!Number.isSafeInteger(b[k])||b[k]<0)||
+       (b.note!==undefined&&(typeof b.note!=='string'||b.note.length>1000)))
+      return res.status(400).json({error:'Provide a business date and non-negative whole-paise cash figures.'});
+    if(!await shopAccess(req.user,shopId))return res.status(404).json({error:'Shop not found.'});
+    const cash=await pool.query(
+      `SELECT COALESCE(SUM(p.amount_paise),0)::bigint cash_received_paise
+       FROM sales_invoice_payments p JOIN sales_invoices i ON i.id=p.invoice_id
+       JOIN shops s ON s.id=i.shop_id
+       WHERE i.shop_id=$1 AND p.method='CASH'
+         AND (p.received_at AT TIME ZONE s.timezone)::date=$2::date
+         AND i.status='ISSUED'`,[shopId,date]);
+    const received=Number(cash.rows[0].cash_received_paise);
+    const expected= b.openingFloatPaise+received-b.cashRefundsPaise-b.cashPaidOutPaise-b.cashDepositedPaise;
+    if(expected<0)return res.status(400).json({error:'Cash outflows exceed opening float plus recorded cash receipts.'});
+    try{
+      const result=await pool.query(
+        `INSERT INTO shop_daily_closures
+         (shop_id,business_date,opening_float_paise,cash_refunds_paise,cash_paid_out_paise,cash_deposited_paise,cash_counted_paise,expected_cash_paise,variance_paise,note,closed_by)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        [shopId,date,b.openingFloatPaise,b.cashRefundsPaise,b.cashPaidOutPaise,b.cashDepositedPaise,b.cashCountedPaise,expected,b.cashCountedPaise-expected,b.note||null,req.user.id]);
+      res.status(201).json({closure:result.rows[0],cashReceivedPaise:received});
+    }catch(error){if(error.code==='23505')return res.status(409).json({error:'This shop and business date have already been closed.'});throw error;}
+  }));
+
+  router.get('/shops/:shopId/daily-close', ...frontDesk, asyncRoute(async(req,res)=>{
+    const shopId=id(req.params.shopId),date=req.query.businessDate;
+    if(!shopId||!validDate(date))return res.status(400).json({error:'Provide shopId and businessDate.'});
+    if(!await shopAccess(req.user,shopId))return res.status(404).json({error:'Shop not found.'});
+    const result=await pool.query('SELECT * FROM shop_daily_closures WHERE shop_id=$1 AND business_date=$2::date',[shopId,date]);
+    res.json({closure:result.rows[0]||null});
+  }));
+
   router.post('/invoices/:invoiceId/credit-notes', ...frontDesk, asyncRoute(async(req,res)=>{
     const invoiceId=id(req.params.invoiceId),reason=typeof req.body?.reason==='string'?req.body.reason.trim():'';
     const amount=Number(req.body?.amountPaise);
