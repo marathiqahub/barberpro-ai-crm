@@ -89,7 +89,7 @@ function createCustomerExperienceRouter(pool, tokenService, options = {}) {
     const provider=await razorpay('/payments/'+encodeURIComponent(b.razorpay_payment_id),'GET');
     if(provider.order_id!==b.razorpay_order_id||Number(provider.amount)!==Number(found.rows[0].amount_paise)||provider.currency!=='INR')return res.status(400).json({error:'Provider payment does not match this order.'});
     if(!['captured','authorized'].includes(provider.status))return res.status(409).json({error:'Payment is not yet captured or authorized.'});
-    const out=await pool.query("UPDATE appointment_extra_payments SET provider_payment_id=$2,status='PAID',updated_at=NOW() WHERE id=$1 AND customer_id=$3 RETURNING id,appointment_id,payment_type,amount_paise,status",[paymentId,b.razorpay_payment_id,req.user.id]);
+    const finalStatus=provider.status==='captured'?'PAID':'AUTHORIZED';const out=await pool.query("UPDATE appointment_extra_payments SET provider_payment_id=$2,status=$3,updated_at=NOW() WHERE id=$1 AND customer_id=$4 RETURNING id,appointment_id,payment_type,amount_paise,status",[paymentId,b.razorpay_payment_id,finalStatus,req.user.id]);
     res.json({payment:out.rows[0]});
   }));
   router.post('/admin/shops/:shopId/appointments/:appointmentId/no-show-fee',...frontDesk,wrap(async(req,res)=>{
