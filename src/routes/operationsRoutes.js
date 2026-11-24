@@ -9,7 +9,7 @@ function createOperationsRouter(pool, tokenService) {
   const frontDesk = [authenticate, requireRole('ADMIN', 'FRONT_DESK')];
   const admin = [authenticate, requireRole('ADMIN')];
   const asyncRoute = fn => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
-  const id = value => /^[1-9]\\d*$/.test(String(value)) ? Number(value) : null;
+  const id = value => { const n=Number(value); return /^[1-9]\\d*$/.test(String(value)) && Number.isSafeInteger(n) ? n : null; };
   const csv = value => '"' + String(value ?? '').replace(/"/g, '""') + '"';
   const financialYear = date => {
     const d = new Date(date + 'T00:00:00Z');
@@ -97,7 +97,7 @@ function createOperationsRouter(pool, tokenService) {
     try {
       await client.query('BEGIN');
       const shop=await client.query(
-        `SELECT s.id, COALESCE(t.gst_registered,FALSE) gst_registered,t.gstin,t.state_code,t.invoice_prefix
+        `SELECT s.id, COALESCE(t.gst_registered,FALSE) gst_registered,t.gstin,t.state_code,t.invoice_prefix,t.legal_name,t.trade_name,t.address
          FROM shops s LEFT JOIN shop_tax_profiles t ON t.shop_id=s.id WHERE s.id=$1 AND s.is_active=TRUE FOR UPDATE OF s`,[shopId]);
       if(!shop.rowCount){await client.query('ROLLBACK');return res.status(404).json({error:'Active shop not found.'});}
       const profile=shop.rows[0], date=b.issueDate, fy=financialYear(date);
@@ -121,13 +121,14 @@ function createOperationsRouter(pool, tokenService) {
         subtotal+=gross;discount+=disc;taxable+=base;cgst+=line.cgst;sgst+=line.sgst;igst+=line.igst;lines.push(line);
       }
       const total=taxable+cgst+sgst+igst, paid=b.amountPaidPaise||0;
+      if(total<1){await client.query('ROLLBACK');return res.status(400).json({error:'Invoice total must be at least ₹0.01.'});}
       if(paid>total){await client.query('ROLLBACK');return res.status(400).json({error:'Amount paid cannot exceed invoice total.'});}
       const prefix=profile.invoice_prefix||'BP', invoiceNumber=await nextNumber(client,shopId,'INVOICE',fy,prefix);
       const mode=['CASH','UPI','CARD','RAZORPAY','MIXED','UNPAID'].includes(b.paymentMode)?b.paymentMode:(paid?'MIXED':'UNPAID');
       const inserted=await client.query(
-        `INSERT INTO sales_invoices (shop_id,invoice_number,financial_year,document_type,issue_date,customer_name,customer_email,customer_phone,customer_gstin,place_of_supply_state_code,subtotal_paise,discount_paise,taxable_paise,cgst_paise,sgst_paise,igst_paise,total_paise,amount_paid_paise,payment_mode,created_by)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
-        [shopId,invoiceNumber,fy,docType,date,b.customerName.trim(),b.customerEmail||null,b.customerPhone||null,b.customerGstin||null,place,subtotal,discount,taxable,cgst,sgst,igst,total,paid,mode,req.user.id]);
+        `INSERT INTO sales_invoices (shop_id,invoice_number,financial_year,document_type,issue_date,seller_gstin,seller_legal_name,seller_trade_name,seller_address,seller_state_code,customer_name,customer_email,customer_phone,customer_gstin,place_of_supply_state_code,subtotal_paise,discount_paise,taxable_paise,cgst_paise,sgst_paise,igst_paise,total_paise,amount_paid_paise,payment_mode,created_by)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25) RETURNING *`,
+        [shopId,invoiceNumber,fy,docType,date,profile.gstin,profile.legal_name,profile.trade_name,profile.address,profile.state_code,b.customerName.trim(),b.customerEmail||null,b.customerPhone||null,b.customerGstin||null,place,subtotal,discount,taxable,cgst,sgst,igst,total,paid,mode,req.user.id]);
       const invoice=inserted.rows[0];
       for(const line of lines) await client.query(
         `INSERT INTO sales_invoice_lines (invoice_id,description,hsn_sac_code,quantity,unit_price_paise,discount_paise,tax_rate_bps,taxable_paise,cgst_paise,sgst_paise,igst_paise,total_paise)
