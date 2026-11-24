@@ -25,6 +25,8 @@ ALTER TABLE payments
   ADD COLUMN IF NOT EXISTS payment_purpose VARCHAR(24) NOT NULL DEFAULT 'APPOINTMENT'
     CHECK (payment_purpose IN ('APPOINTMENT','BOOKING_DEPOSIT','NO_SHOW_FEE'));
 
+ALTER TABLE payments DROP CONSTRAINT IF EXISTS payments_appointment_id_key;
+CREATE UNIQUE INDEX IF NOT EXISTS payments_appointment_purpose_unique_idx ON payments(appointment_id,payment_purpose);
 CREATE INDEX IF NOT EXISTS payments_appointment_purpose_idx ON payments(appointment_id,payment_purpose,status);
 
 CREATE TABLE IF NOT EXISTS shop_waitlist_entries (
@@ -39,6 +41,7 @@ CREATE TABLE IF NOT EXISTS shop_waitlist_entries (
   status VARCHAR(12) NOT NULL DEFAULT 'WAITING'
     CHECK (status IN ('WAITING','OFFERED','BOOKED','EXPIRED','CANCELLED')),
   offered_staff_id BIGINT,
+  offered_from_appointment_id BIGINT REFERENCES appointments(id) ON DELETE SET NULL,
   offered_starts_at TIMESTAMPTZ,
   offered_ends_at TIMESTAMPTZ,
   offer_expires_at TIMESTAMPTZ,
@@ -108,3 +111,30 @@ ALTER TABLE shop_customer_reminders
   ADD COLUMN IF NOT EXISTS dedupe_key VARCHAR(160);
 CREATE UNIQUE INDEX IF NOT EXISTS shop_customer_reminders_dedupe_idx
   ON shop_customer_reminders(dedupe_key) WHERE dedupe_key IS NOT NULL;
+
+-- Retail POS catalog pricing and invoice-to-stock traceability.
+ALTER TABLE shop_inventory_items
+  ADD COLUMN IF NOT EXISTS retail_price_paise BIGINT NOT NULL DEFAULT 0 CHECK(retail_price_paise>=0);
+ALTER TABLE sales_invoice_lines
+  ADD COLUMN IF NOT EXISTS inventory_item_id BIGINT REFERENCES shop_inventory_items(id) ON DELETE RESTRICT;
+CREATE INDEX IF NOT EXISTS sales_invoice_lines_inventory_item_idx ON sales_invoice_lines(inventory_item_id) WHERE inventory_item_id IS NOT NULL;
+
+ALTER TABLE shop_customer_reminders ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+
+CREATE TABLE IF NOT EXISTS shop_customer_consent_events (
+  id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+  shop_id BIGINT NOT NULL REFERENCES shops(id) ON DELETE CASCADE,
+  customer_id BIGINT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  purpose VARCHAR(32) NOT NULL CHECK(purpose IN('APPOINTMENT_REMINDERS','MARKETING','PROFILE_NOTES','PHOTO_STORAGE')),
+  channel VARCHAR(12) CHECK(channel IS NULL OR channel IN('EMAIL','SMS','WHATSAPP')),
+  consent BOOLEAN NOT NULL,
+  notice_version VARCHAR(64),
+  source VARCHAR(32) NOT NULL DEFAULT 'CUSTOMER_PORTAL',
+  recorded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS shop_customer_consent_events_idx
+  ON shop_customer_consent_events(shop_id,customer_id,recorded_at DESC);
+
+ALTER TABLE shop_message_templates ADD COLUMN IF NOT EXISTS provider_template_language VARCHAR(16) NOT NULL DEFAULT 'en_US';
+
+ALTER TABLE shop_customer_reminders ADD COLUMN IF NOT EXISTS attempt_count INTEGER NOT NULL DEFAULT 0 CHECK(attempt_count>=0);
