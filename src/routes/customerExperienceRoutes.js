@@ -42,13 +42,18 @@ function createCustomerExperienceRouter(pool, tokenService, options = {}) {
 
   router.put('/admin/shops/:shopId/appointment-policy',...admin,wrap(async(req,res)=>{
     const shopId=id(req.params.shopId),b=req.body||{};
-    if(!shopId||typeof b.depositsEnabled!=='boolean'||!['FIXED','PERCENT'].includes(b.depositType)||!Number.isInteger(b.depositValue)||b.depositValue<0||b.depositValue>(b.depositType==='PERCENT'?100:100000000)||!Number.isInteger(b.cancellationWindowHours)||b.cancellationWindowHours<0||b.cancellationWindowHours>720||!Number.isSafeInteger(b.cancellationFeePaise)||b.cancellationFeePaise<0||!Number.isSafeInteger(b.noShowFeePaise)||b.noShowFeePaise<0||(b.googleReviewUrl!==undefined&&b.googleReviewUrl!==null&&(!validUrl(b.googleReviewUrl)||b.googleReviewUrl.length>1000)))return res.status(400).json({error:'Invalid deposit, cancellation, no-show or review policy.'});
+    if(!shopId||typeof b.depositsEnabled!=='boolean'||!['FIXED','PERCENT'].includes(b.depositType)||!Number.isInteger(b.depositValue)||b.depositValue<(b.depositsEnabled?(b.depositType==='FIXED'?100:1):0)||b.depositValue>(b.depositType==='PERCENT'?100:100000000)||!Number.isInteger(b.cancellationWindowHours)||b.cancellationWindowHours<0||b.cancellationWindowHours>720||!Number.isSafeInteger(b.cancellationFeePaise)||b.cancellationFeePaise<0||!Number.isSafeInteger(b.noShowFeePaise)||b.noShowFeePaise<0||(b.googleReviewUrl!==undefined&&b.googleReviewUrl!==null&&(!validUrl(b.googleReviewUrl)||b.googleReviewUrl.length>1000)))return res.status(400).json({error:'Invalid deposit, cancellation, no-show or review policy.'});
     const out=await pool.query(`INSERT INTO shop_appointment_policies(shop_id,deposits_enabled,deposit_type,deposit_value,cancellation_window_hours,cancellation_fee_paise,no_show_fee_paise,google_review_url,updated_by,updated_at)
       SELECT id,$2,$3,$4,$5,$6,$7,$8,$9,NOW() FROM shops WHERE id=$1 AND is_active=TRUE
       ON CONFLICT(shop_id) DO UPDATE SET deposits_enabled=EXCLUDED.deposits_enabled,deposit_type=EXCLUDED.deposit_type,deposit_value=EXCLUDED.deposit_value,cancellation_window_hours=EXCLUDED.cancellation_window_hours,cancellation_fee_paise=EXCLUDED.cancellation_fee_paise,no_show_fee_paise=EXCLUDED.no_show_fee_paise,google_review_url=EXCLUDED.google_review_url,updated_by=EXCLUDED.updated_by,updated_at=NOW()
       RETURNING *`,[shopId,b.depositsEnabled,b.depositType,b.depositValue,b.cancellationWindowHours,b.cancellationFeePaise,b.noShowFeePaise,b.googleReviewUrl||null,req.user.id]);
     if(!out.rowCount)return res.status(404).json({error:'Active shop not found.'});
     res.json({policy:out.rows[0]});
+  }));
+  router.get('/customer/shops/:shopId/appointment-policy',...customer,wrap(async(req,res)=>{
+    const shopId=id(req.params.shopId);if(!shopId)return res.status(400).json({error:'Invalid shop.'});
+    const out=await pool.query('SELECT deposits_enabled,deposit_type,deposit_value,cancellation_window_hours,cancellation_fee_paise,no_show_fee_paise,google_review_url FROM shop_appointment_policies WHERE shop_id=$1',[shopId]);
+    res.json({policy:out.rows[0]||{deposits_enabled:false,cancellation_window_hours:24,cancellation_fee_paise:0,no_show_fee_paise:0}});
   }));
   router.get('/admin/shops/:shopId/appointment-policy',...admin,wrap(async(req,res)=>{
     const shopId=id(req.params.shopId);if(!shopId)return res.status(400).json({error:'Invalid shop.'});
@@ -194,6 +199,18 @@ function createCustomerExperienceRouter(pool, tokenService, options = {}) {
     res.json({preference:out.rows[0]});
   }));
 
+  router.put('/admin/shops/:shopId/inventory/items/:itemId/retail-price',...admin,wrap(async(req,res)=>{
+    const shopId=id(req.params.shopId),itemId=id(req.params.itemId),price=req.body?.retailPricePaise;
+    if(!shopId||!itemId||!Number.isSafeInteger(price)||price<0)return res.status(400).json({error:'Provide a non-negative retail price in paise.'});
+    const out=await pool.query('UPDATE shop_inventory_items SET retail_price_paise=$3,updated_at=NOW() WHERE id=$1 AND shop_id=$2 AND is_active=TRUE RETURNING id,sku,name,quantity,retail_price_paise,reorder_level',[itemId,shopId,price]);
+    if(!out.rowCount)return res.status(404).json({error:'Active inventory item not found.'});
+    res.json({item:out.rows[0]});
+  }));
+  router.get('/admin/shops/:shopId/feedback',...admin,wrap(async(req,res)=>{
+    const shopId=id(req.params.shopId);if(!shopId)return res.status(400).json({error:'Invalid shop.'});
+    const out=await pool.query('SELECT f.id,f.appointment_id,f.customer_id,u.name customer_name,f.rating,f.comment,f.created_at FROM shop_customer_feedback f JOIN users u ON u.id=f.customer_id WHERE f.shop_id=$1 ORDER BY f.created_at DESC LIMIT 500',[shopId]);
+    res.json({feedback:out.rows});
+  }));
   router.post('/admin/shops/:shopId/queue-displays',...admin,wrap(async(req,res)=>{
     const shopId=id(req.params.shopId),label=typeof req.body?.label==='string'?req.body.label.trim().slice(0,80):'Live queue';
     if(!shopId)return res.status(400).json({error:'Invalid shop.'});
