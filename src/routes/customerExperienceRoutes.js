@@ -16,6 +16,7 @@ function createCustomerExperienceRouter(pool, tokenService, options = {}) {
   const id = value => /^[1-9]\d*$/.test(String(value)) && Number.isSafeInteger(Number(value)) ? Number(value) : null;
   const hash = value => crypto.createHash('sha256').update(value).digest('hex');
   const validUrl = value => { try { const u=new URL(value); return u.protocol==='https:' && u.username==='' && u.password===''; } catch { return false; } };
+  const validPrivateAssetUrl = value => { if(!validUrl(value))return false;const allowed=(env.PRIVATE_MEDIA_HOSTS||'').split(',').map(x=>x.trim().toLowerCase()).filter(Boolean);try{return allowed.includes(new URL(value).hostname.toLowerCase())}catch{return false} };
   async function shopAccess(user, shopId) {
     if (user.role === 'ADMIN') return true;
     const r = await pool.query('SELECT 1 FROM shop_front_desk WHERE shop_id=$1 AND user_id=$2 AND is_active=TRUE',[shopId,user.id]);
@@ -113,6 +114,7 @@ function createCustomerExperienceRouter(pool, tokenService, options = {}) {
     const out=await pool.query(`INSERT INTO shop_waitlist_entries(shop_id,customer_id,service_id,preferred_staff_id,preferred_date,preferred_from,preferred_to)
       SELECT sh.id,$2,sv.id,$4,$5,$6,$7 FROM shops sh JOIN services sv ON sv.shop_id=sh.id
       WHERE sh.id=$1 AND sh.is_active=TRUE AND sv.id=$3 AND sv.is_active=TRUE
+        AND ($4::bigint IS NULL OR EXISTS(SELECT 1 FROM shop_staff st WHERE st.id=$4 AND st.shop_id=sh.id AND st.is_active=TRUE))
       RETURNING *`,[shopId,req.user.id,serviceId,staffId,date,req.body.preferredFrom||null,req.body.preferredTo||null]);
     if(!out.rowCount)return res.status(404).json({error:'Active shop or service not found.'});
     res.status(201).json({waitlistEntry:out.rows[0]});
@@ -170,7 +172,9 @@ function createCustomerExperienceRouter(pool, tokenService, options = {}) {
   }));
   router.post('/admin/shops/:shopId/customers/:customerId/photos',...admin,wrap(async(req,res)=>{
     const shopId=id(req.params.shopId),customerId=id(req.params.customerId),appointmentId=req.body?.appointmentId==null?null:id(req.body.appointmentId),kind=req.body?.kind,url=req.body?.privateAssetUrl;
-    if(!shopId||!customerId||!['BEFORE','AFTER'].includes(kind)||!validUrl(url)||url.length>2000)return res.status(400).json({error:'Provide a private HTTPS asset URL and BEFORE/AFTER type.'});
+    if(!shopId||!customerId||!['BEFORE','AFTER'].includes(kind)||typeof url!=='string'||url.length>2000)return res.status(400).json({error:'Provide a private HTTPS asset URL and BEFORE/AFTER type.'});
+    if(!(env.PRIVATE_MEDIA_HOSTS||'').trim())return res.status(503).json({error:'Private photo storage is not configured. Set PRIVATE_MEDIA_HOSTS to an allowlist of private object-storage hosts.'});
+    if(!validPrivateAssetUrl(url))return res.status(400).json({error:'Photo URL must use HTTPS and match an allowlisted private storage host.'});
     const consent=await pool.query('SELECT photo_consent FROM shop_customer_profiles WHERE shop_id=$1 AND customer_id=$2',[shopId,customerId]);
     if(!consent.rowCount||!consent.rows[0].photo_consent)return res.status(403).json({error:'Customer has not consented to before/after photo storage.'});
     const out=await pool.query('INSERT INTO shop_customer_photos(shop_id,customer_id,appointment_id,photo_kind,private_asset_url,consent_recorded_at,uploaded_by) VALUES($1,$2,$3,$4,$5,NOW(),$6) RETURNING id,shop_id,customer_id,appointment_id,photo_kind,created_at',[shopId,customerId,appointmentId,kind,url,req.user.id]);
@@ -254,16 +258,19 @@ function createCustomerExperienceRouter(pool, tokenService, options = {}) {
   }));
   router.get('/customer/shops/:shopId/data-export',...customer,wrap(async(req,res)=>{
     const shopId=id(req.params.shopId);if(!shopId)return res.status(400).json({error:'Invalid shop.'});
-    const [profile,appointments,payments,feedback,consents,photos,reminders]=await Promise.all([
+    const [profile,appointments,payments,extraPayments,feedback,consents,photos,reminders,preferences,waitlist]=await Promise.all([
       pool.query('SELECT id,name,email,phone,created_at FROM users WHERE id=$1',[req.user.id]),
       pool.query('SELECT id,shop_id,service_id,staff_id,starts_at,ends_at,status,customer_notes,created_at FROM appointments WHERE shop_id=$1 AND customer_id=$2 ORDER BY starts_at DESC',[shopId,req.user.id]),
       pool.query('SELECT p.id,p.appointment_id,p.amount_paise,p.currency,p.status,p.created_at FROM payments p JOIN appointments a ON a.id=p.appointment_id WHERE a.shop_id=$1 AND p.customer_id=$2',[shopId,req.user.id]),
+      pool.query('SELECT id,appointment_id,payment_type,amount_paise,currency,status,created_at FROM appointment_extra_payments WHERE customer_id=$1 AND appointment_id IN (SELECT id FROM appointments WHERE shop_id=$2)',[req.user.id,shopId]),
       pool.query('SELECT rating,comment,created_at FROM shop_customer_feedback WHERE shop_id=$1 AND customer_id=$2',[shopId,req.user.id]),
       pool.query('SELECT purpose,consent,notice_version,source,recorded_at FROM shop_privacy_consent_events WHERE shop_id=$1 AND customer_id=$2 ORDER BY recorded_at',[shopId,req.user.id]),
       pool.query('SELECT id,appointment_id,photo_kind,created_at FROM shop_customer_photos WHERE shop_id=$1 AND customer_id=$2',[shopId,req.user.id]),
-      pool.query('SELECT channel,template_key,scheduled_at,status,sent_at FROM shop_customer_reminders WHERE shop_id=$1 AND customer_id=$2 ORDER BY created_at DESC LIMIT 500',[shopId,req.user.id])
+      pool.query('SELECT channel,template_key,scheduled_at,status,sent_at FROM shop_customer_reminders WHERE shop_id=$1 AND customer_id=$2 ORDER BY created_at DESC LIMIT 500',[shopId,req.user.id]),
+      pool.query('SELECT preferred_staff_id,preferred_service_id,care_notes,photo_consent,photo_consent_at FROM shop_customer_profiles WHERE shop_id=$1 AND customer_id=$2',[shopId,req.user.id]),
+      pool.query('SELECT service_id,preferred_staff_id,preferred_date,status,created_at FROM shop_waitlist_entries WHERE shop_id=$1 AND customer_id=$2',[shopId,req.user.id])
     ]);
-    res.set('Content-Disposition','attachment; filename="barberpro-data-export.json"').json({exportedAt:new Date().toISOString(),profile:profile.rows[0],appointments:appointments.rows,payments:payments.rows,feedback:feedback.rows,consents:consents.rows,photos:photos.rows,reminders:reminders.rows});
+    res.set('Content-Disposition','attachment; filename="barberpro-data-export.json"').json({exportedAt:new Date().toISOString(),profile:profile.rows[0],appointments:appointments.rows,payments:payments.rows,extraPayments:extraPayments.rows,feedback:feedback.rows,consents:consents.rows,photos:photos.rows,reminders:reminders.rows,preferences:preferences.rows,waitlist:waitlist.rows});
   }));
   router.post('/customer/shops/:shopId/data-rights-requests',...customer,wrap(async(req,res)=>{
     const shopId=id(req.params.shopId),type=req.body?.requestType,reason=typeof req.body?.reason==='string'?req.body.reason.trim():null;
