@@ -1,5 +1,5 @@
 'use strict';
-function csvCell(value){const s=String(value??'');return /[",\r\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}
+function csvCell(value){let s=String(value??'');if(/^[\\s]*[=+@-]/.test(s))s="'"+s;return /[",\\r\\n]/.test(s)?'"'+s.replace(/"/g,'""')+'"':s;}
 function toCsv(rows,headers){return [headers.map(csvCell).join(','),...rows.map(row=>headers.map(h=>csvCell(row[h])).join(','))].join('\r\n')+'\r\n';}
 function parseCsv(text){
  const rows=[];let row=[],cell='',quoted=false;
