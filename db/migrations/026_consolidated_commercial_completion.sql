@@ -130,3 +130,7 @@ CREATE TABLE IF NOT EXISTS shop_audit_events (
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS shop_audit_events_shop_date_idx ON shop_audit_events(shop_id,created_at DESC);
+
+-- Link POS service lines to their service catalogue entries for deterministic stock recipes.
+ALTER TABLE sales_invoice_lines
+  ADD COLUMN IF NOT EXISTS service_id BIGINT REFERENCES services(id) ON DELETE RESTRICT;
