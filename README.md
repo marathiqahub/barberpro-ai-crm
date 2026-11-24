@@ -162,3 +162,11 @@ The browser application is served from `/`. Sign in with a CUSTOMER, BARBER or A
 Apply `db/migrations/004_create_payment_tables.sql` after migration 003. Configure `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` and `RAZORPAY_WEBHOOK_SECRET` in the deployment secret manager. Register `https://YOUR_HOST/api/payments/webhook` with Razorpay for `payment.captured`, `payment.failed`, `refund.processed` and `refund.failed`. Checkout and webhook signatures are verified server-side; webhook event IDs are idempotent. Admin reconciliation is `GET /api/payments/reconciliation`; refunds use `POST /api/payments/:paymentId/refunds`. Never expose secret credentials to browsers. Checkout remains disabled until credentials are configured.
 
 The initial SPA stores bearer tokens in local storage. Before production, move browser authentication behind a same-origin backend-for-frontend using Secure, HttpOnly, SameSite cookies and CSRF protection.
+
+## Phase 5: AI receptionist and business intelligence
+
+The public shop-scoped receptionist endpoint is `POST /api/ai/receptionist`. It accepts `shopId`, `message`, and an optional `conversation` array containing only `user` and `assistant` messages. It answers from the selected active shop's public profile and active service catalogue. It does not receive customer records, create or change bookings, confirm live availability, process payments, or perform refunds. Customers must use the booking experience for live slot selection and booking confirmation.
+
+The receptionist requires `OPENAI_API_KEY` and supports optional `OPENAI_BASE_URL` and `OPENAI_MODEL`. Requests are rate-limited to 20 per minute per client IP; only the latest eight history messages are sent and each message is limited to 500 characters.
+
+The ADMIN-only `POST /api/admin/ai/insights` endpoint provides shop-level or cross-shop performance analysis for a date range. It uses aggregate appointment outcomes, net captured payments after processed refunds, and popular services. The model receives aggregate metrics only, not customer names, emails, phone numbers or booking notes. AI recommendations are advisory and do not execute operational or financial actions.
