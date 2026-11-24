@@ -139,6 +139,14 @@ function createRetentionRouter(pool, tokens) {
       nextUp:next.map(x=>({ticket:'#'+x.id,service:x.service_name,barber:x.barber_name,startsAt:x.starts_at}))});
   }));
 
+  r.get('/customer/shops/:shopId/preferences',...customer,wrap(async(q,s)=>{
+    const shop=id(q.params.shopId);if(!shop)return s.status(400).json({error:'Invalid shop id.'});
+    const x=await pool.query(`SELECT p.*,
+      COALESCE((SELECT e.consent FROM shop_customer_consent_events e WHERE e.shop_id=p.shop_id AND e.customer_id=p.customer_id
+        AND e.purpose='PROFILE_NOTES' ORDER BY e.recorded_at DESC LIMIT 1),FALSE) profile_notes_consent
+      FROM shop_customer_profiles p WHERE p.shop_id=$1 AND p.customer_id=$2`,[shop,q.user.id]);
+    s.json({profile:x.rows[0]||null});
+  }));
   r.put('/customer/shops/:shopId/preferences',...customer,wrap(async(q,s)=>{
     const shop=id(q.params.shopId),b=q.body||{},staff=b.preferredStaffId==null?null:id(b.preferredStaffId),service=b.preferredServiceId==null?null:id(b.preferredServiceId);
     if(!shop||(b.preferredStaffId!=null&&!staff)||(b.preferredServiceId!=null&&!service)||
@@ -235,13 +243,16 @@ function createRetentionRouter(pool, tokens) {
 
   r.get('/admin/shops/:shopId/rebooking-due',...admin,wrap(async(q,s)=>{
     const shop=id(q.params.shopId);if(!shop)return s.status(400).json({error:'Invalid shop id.'});
-    const x=await pool.query(`SELECT cp.customer_id,u.name,u.phone,u.email,cp.preferred_interval_days,
-      MAX(a.starts_at) last_visit,MAX(a.starts_at)+make_interval(days=>COALESCE(cp.preferred_interval_days,21)) due_at
-      FROM shop_customer_profiles cp JOIN users u ON u.id=cp.customer_id
-      JOIN appointments a ON a.shop_id=cp.shop_id AND a.customer_id=cp.customer_id AND a.status='COMPLETED'
-      WHERE cp.shop_id=$1 GROUP BY cp.customer_id,u.name,u.phone,u.email,cp.preferred_interval_days
-      HAVING MAX(a.starts_at)+make_interval(days=>COALESCE(cp.preferred_interval_days,21))<=NOW()
-      ORDER BY due_at LIMIT 500`,[shop]);s.json({customers:x.rows});
+    const x=await pool.query(`WITH last_visits AS (
+      SELECT DISTINCT ON (a.shop_id,a.customer_id) a.shop_id,a.customer_id,a.starts_at
+      FROM appointments a WHERE a.status='COMPLETED' AND a.shop_id=$1 ORDER BY a.shop_id,a.customer_id,a.starts_at DESC
+    )
+    SELECT lv.customer_id,u.name,u.phone,u.email,COALESCE(cp.preferred_interval_days,21) preferred_interval_days,
+      lv.starts_at last_visit,lv.starts_at+make_interval(days=>COALESCE(cp.preferred_interval_days,21)) due_at
+    FROM last_visits lv LEFT JOIN shop_customer_profiles cp ON cp.shop_id=lv.shop_id AND cp.customer_id=lv.customer_id
+    JOIN users u ON u.id=lv.customer_id
+    WHERE lv.starts_at+make_interval(days=>COALESCE(cp.preferred_interval_days,21))<=NOW()
+    ORDER BY due_at LIMIT 500`,[shop]);s.json({customers:x.rows});
   }));
 
   r.post('/customer/appointments/:appointmentId/review',...customer,wrap(async(q,s)=>{

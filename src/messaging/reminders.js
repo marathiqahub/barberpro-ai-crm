@@ -7,7 +7,7 @@ async function scheduleAppointmentReminders(db,appointment,options={}){
    )
    INSERT INTO shop_customer_reminders(shop_id,customer_id,appointment_id,channel,template_key,scheduled_at,dedupe_key)
    SELECT $1,$2,$3,c.channel,rt.template_key,GREATEST(NOW(),$4::timestamptz-make_interval(hours=>rt.hours_before)),
-     'appointment:'||$3||':'||c.channel||':'||rt.template_key
+     'appointment:'||($3::bigint)::text||':'||c.channel||':'||rt.template_key
    FROM shop_message_consents c
    JOIN shop_messaging_settings m ON m.shop_id=c.shop_id AND c.channel=ANY(m.enabled_channels)
    JOIN reminder_types rt ON TRUE

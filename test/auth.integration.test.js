@@ -19,8 +19,12 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
   const baseUrl = `http://127.0.0.1:${port}`;
 
   try {
-    for (const migration of ['001_create_customers.sql', '002_create_auth_tables.sql', '003_create_booking_tables.sql', '004_create_payment_tables.sql', '005_create_account_activation_tokens.sql']) {
-      const sql = fs.readFileSync(path.join(__dirname, '..', 'db', 'migrations', migration), 'utf8');
+    const migrationsDir = path.join(__dirname, '..', 'db', 'migrations');
+    const migrations = fs.readdirSync(migrationsDir)
+      .filter((file) => /^\d+_.*\.sql$/.test(file))
+      .sort();
+    for (const migration of migrations) {
+      const sql = fs.readFileSync(path.join(migrationsDir, migration), 'utf8');
       await pool.query(sql);
     }
 

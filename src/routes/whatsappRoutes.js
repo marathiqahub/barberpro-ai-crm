@@ -28,7 +28,7 @@ function createWhatsAppRouter(pool,options={}){
      reply=updated.rowCount?'Booking #'+updated.rows[0].id+' is confirmed. See you soon!':'That booking could not be confirmed. Please check the booking in the app or contact the shop.';
     }else{
      const updated=await pool.query(`UPDATE appointments SET status='CANCELLED',updated_at=NOW()
-      WHERE id=$1 AND shop_id=$2 AND customer_id=$3 AND status IN('BOOKED','CONFIRMED') AND starts_at>=NOW()+make_interval(hours=>COALESCE((SELECT cancellation_notice_hours FROM shop_booking_policies WHERE shop_id=appointments.shop_id),0)) RETURNING id`,[Number(command[2]),shopId,user.rows[0].id]);
+      WHERE id=$1 AND shop_id=$2 AND customer_id=$3 AND status IN('BOOKED','CONFIRMED') AND starts_at>=NOW()+make_interval(hours=>COALESCE((SELECT cancellation_notice_hours FROM shop_booking_policies WHERE shop_id=appointments.shop_id),24)) RETURNING id`,[Number(command[2]),shopId,user.rows[0].id]);
      if(updated.rowCount){await pool.query("UPDATE shop_customer_reminders SET status='CANCELLED',processing_at=NULL WHERE appointment_id=$1 AND status IN('PENDING','PROCESSING')",[Number(command[2])]);try{await offerWaitlistEntry(pool,shopId,null,Number(command[2]));}catch(e){console.error('WhatsApp cancellation waitlist offer failed',e.message)}reply='Booking #'+command[2]+' has been cancelled. Thank you for letting us know.';}
      else reply='That booking could not be cancelled. Please check the booking in the app or contact the shop.';
     }

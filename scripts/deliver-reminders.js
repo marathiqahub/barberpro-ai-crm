@@ -19,7 +19,7 @@ async function queueMissingAppointmentReminders(){
   INSERT INTO shop_customer_reminders(shop_id,customer_id,appointment_id,channel,template_key,scheduled_at,dedupe_key)
   SELECT a.shop_id,a.customer_id,a.id,c.channel,rt.template_key,
     GREATEST(NOW(),a.starts_at-make_interval(hours=>rt.hours_before)),
-    'appointment:'||a.id||':'||c.channel||':'||rt.template_key
+    'appointment:'||a.id::text||':'||c.channel||':'||rt.template_key
   FROM appointments a JOIN shop_message_consents c ON c.shop_id=a.shop_id AND c.customer_id=a.customer_id
   JOIN shop_messaging_settings m ON m.shop_id=a.shop_id AND c.channel=ANY(m.enabled_channels)
   JOIN reminder_types rt ON TRUE
@@ -36,16 +36,15 @@ async function queueRebookingAndReviewNudges(){
    SELECT DISTINCT ON (a.shop_id,a.customer_id) a.shop_id,a.customer_id,a.id appointment_id,a.starts_at,a.service_id
    FROM appointments a WHERE a.status='COMPLETED' ORDER BY a.shop_id,a.customer_id,a.starts_at DESC
   ), due AS (
-   SELECT lv.*,cp.preferred_interval_days,sh.name shop_name,sv.name service_name
-   FROM last_visits lv JOIN shop_customer_profiles cp ON cp.shop_id=lv.shop_id AND cp.customer_id=lv.customer_id
+   SELECT lv.*,COALESCE(cp.preferred_interval_days,21) preferred_interval_days,sh.name shop_name,sv.name service_name
+   FROM last_visits lv LEFT JOIN shop_customer_profiles cp ON cp.shop_id=lv.shop_id AND cp.customer_id=lv.customer_id
    JOIN shops sh ON sh.id=lv.shop_id JOIN services sv ON sv.id=lv.service_id
-   WHERE cp.preferred_interval_days IS NOT NULL
-     AND lv.starts_at+make_interval(days=>cp.preferred_interval_days)<=NOW()
+   WHERE lv.starts_at+make_interval(days=>COALESCE(cp.preferred_interval_days,21))<=NOW()
      AND NOT EXISTS(SELECT 1 FROM appointments upcoming WHERE upcoming.shop_id=lv.shop_id AND upcoming.customer_id=lv.customer_id AND upcoming.status IN('BOOKED','CONFIRMED') AND upcoming.starts_at>NOW())
   )
   INSERT INTO shop_customer_reminders(shop_id,customer_id,appointment_id,channel,template_key,scheduled_at,dedupe_key)
   SELECT d.shop_id,d.customer_id,d.appointment_id,c.channel,'REBOOKING_NUDGE',NOW(),
-    'rebook:'||d.shop_id||':'||d.customer_id||':'||d.appointment_id||':'||c.channel
+    'rebook:'||d.shop_id::text||':'||d.customer_id::text||':'||d.appointment_id::text||':'||c.channel
   FROM due d JOIN shop_message_consents c ON c.shop_id=d.shop_id AND c.customer_id=d.customer_id
   JOIN shop_messaging_settings m ON m.shop_id=d.shop_id AND c.channel=ANY(m.enabled_channels)
   JOIN shop_message_templates t ON t.shop_id=d.shop_id AND t.channel=c.channel AND t.template_key='REBOOKING_NUDGE' AND t.is_active=TRUE
@@ -55,7 +54,7 @@ async function queueRebookingAndReviewNudges(){
   ON CONFLICT(dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`);
  await pool.query(`INSERT INTO shop_customer_reminders(shop_id,customer_id,appointment_id,channel,template_key,scheduled_at,dedupe_key)
   SELECT a.shop_id,a.customer_id,a.id,c.channel,'REVIEW_REQUEST',NOW(),
-    'review:'||a.id||':'||c.channel
+    'review:'||a.id::text||':'||c.channel
   FROM appointments a JOIN shop_booking_policies bp ON bp.shop_id=a.shop_id AND bp.review_requests_enabled=TRUE
   JOIN shop_message_consents c ON c.shop_id=a.shop_id AND c.customer_id=a.customer_id
   JOIN shop_messaging_settings m ON m.shop_id=a.shop_id AND c.channel=ANY(m.enabled_channels)

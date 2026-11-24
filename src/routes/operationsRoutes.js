@@ -500,6 +500,11 @@ function createOperationsRouter(pool, tokenService) {
     if(!appointmentId||!shopId||!Object.hasOwn(allowed,req.body?.fromStatus)||!allowed[req.body.fromStatus].includes(nextStatus))
       return res.status(400).json({error:'Invalid appointment status transition.'});
     if(!await shopAccess(req.user,shopId)) return res.status(404).json({error:'Shop not found.'});
+    if(nextStatus==='NO_SHOW'){
+      const missed=await pool.query('SELECT ends_at FROM appointments WHERE id=$1 AND shop_id=$2',[appointmentId,shopId]);
+      if(missed.rowCount&&new Date(missed.rows[0].ends_at).getTime()>=Date.now())
+        return res.status(409).json({error:'A no-show fee can only be recorded after the appointment end time.'});
+    }
     if(nextStatus==='CONFIRMED'){
       const deposit=await pool.query('SELECT deposit_due_paise,deposit_paid_paise FROM appointments WHERE id=$1 AND shop_id=$2',[appointmentId,shopId]);
       if(deposit.rowCount&&Number(deposit.rows[0].deposit_due_paise)>Number(deposit.rows[0].deposit_paid_paise))

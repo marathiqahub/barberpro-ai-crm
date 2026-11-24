@@ -348,7 +348,7 @@ function createBookingRouter(pool, tokenService) {
       `UPDATE appointments SET status = 'CANCELLED', updated_at = NOW()
        WHERE id = $1 AND status IN ('BOOKED','CONFIRMED')
          AND starts_at > NOW()
-         AND ($3 = 'ADMIN' OR (customer_id = $2 AND starts_at >= NOW() + make_interval(hours => COALESCE((SELECT cancellation_notice_hours FROM shop_booking_policies WHERE shop_id=appointments.shop_id),0))))
+         AND ($3 = 'ADMIN' OR (customer_id = $2 AND starts_at >= NOW() + make_interval(hours => COALESCE((SELECT cancellation_notice_hours FROM shop_booking_policies WHERE shop_id=appointments.shop_id),24))))
        RETURNING id, shop_id, status, starts_at, ends_at`,
       [appointmentId, req.user.id, req.user.role]
     );
