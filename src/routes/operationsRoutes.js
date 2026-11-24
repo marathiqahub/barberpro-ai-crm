@@ -3,6 +3,7 @@ const argon2 = require('argon2');
 const crypto = require('node:crypto');
 const { createAuthMiddleware } = require('../auth/middleware');
 const { commissionForTaxableAmount, expectedCash, validateTenderAllocations } = require('../financial/calculations');
+const { offerNextWaitlist } = require('../retention/waitlist');
 
 function createOperationsRouter(pool, tokenService) {
   const router = express.Router();
@@ -483,7 +484,8 @@ function createOperationsRouter(pool, tokenService) {
          VALUES($1,$2,$3,'STATUS_CHANGED',$4,$5)`,
         [appointmentId,shopId,req.user.id,req.body.fromStatus,nextStatus]);
       await client.query('COMMIT');
-      res.json({appointment:updated.rows[0]});
+      const waitlistOffer = nextStatus==='CANCELLED' ? await offerNextWaitlist(pool,updated.rows[0]) : null;
+      res.json({appointment:updated.rows[0],waitlistOffer});
     }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
   }));
 
