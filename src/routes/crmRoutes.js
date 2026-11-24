@@ -1,5 +1,6 @@
 const express = require('express');
 const { createAuthMiddleware } = require('../auth/middleware');
+const { validateLoyaltyTransaction, nextLoyaltyBalance } = require('../crm/rules');
 
 function createCrmRouter(pool, tokenService) {
   const router = express.Router();
@@ -59,9 +60,7 @@ function createCrmRouter(pool, tokenService) {
   router.post('/admin/shops/:shopId/customers/:customerId/loyalty', ...admin, asyncRoute(async(req,res)=>{
     const shopId=id(req.params.shopId),customerId=id(req.params.customerId),b=req.body||{};
     const points=b.points, type=b.transactionType, reason=typeof b.reason==='string'?b.reason.trim():'';
-    if(!shopId||!customerId||!Number.isSafeInteger(points)||points===0||
-       !['EARN','REDEEM','ADJUST'].includes(type)||!reason||reason.length>240||
-       (type==='EARN'&&points<1)||(type==='REDEEM'&&points>-1))
+    if(!shopId||!customerId||!validateLoyaltyTransaction(points,type,reason))
       return res.status(400).json({error:'Provide non-zero whole points, a matching transaction type and reason.'});
     if(!await activeShop(shopId))return res.status(404).json({error:'Active shop not found.'});
     const client=await pool.connect();
@@ -71,8 +70,9 @@ function createCrmRouter(pool, tokenService) {
       if(!booking.rowCount){await client.query('ROLLBACK');return res.status(404).json({error:'Customer has no booking history at this shop.'});}
       await client.query(`INSERT INTO shop_loyalty_accounts(shop_id,customer_id) VALUES($1,$2) ON CONFLICT DO NOTHING`,[shopId,customerId]);
       const account=await client.query('SELECT balance_points FROM shop_loyalty_accounts WHERE shop_id=$1 AND customer_id=$2 FOR UPDATE',[shopId,customerId]);
-      const next=Number(account.rows[0].balance_points)+points;
-      if(next<0){await client.query('ROLLBACK');return res.status(400).json({error:'Insufficient loyalty points for this redemption.'});}
+      let next;
+      try{next=nextLoyaltyBalance(Number(account.rows[0].balance_points),points);}
+      catch(error){await client.query('ROLLBACK');return res.status(400).json({error:error.message});}
       await client.query(
         `UPDATE shop_loyalty_accounts SET balance_points=$3,
          lifetime_earned_points=lifetime_earned_points+CASE WHEN $4='EARN' THEN $5 ELSE 0 END,updated_at=NOW()
