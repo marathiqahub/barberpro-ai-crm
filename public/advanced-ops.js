@@ -36,7 +36,7 @@ async function barber(root){
  <hr><h3>Two-factor login</h3><div id="bp-barber-totp-state"></div><button type="button" id="bp-barber-totp-enroll">Set up authenticator</button><div id="bp-barber-totp-setup"></div>`);
  root.append(p);const box=p.querySelector('.advanced-panel');
  try{
-  const dash=await api('/barber/dashboard'),staffOpts=dash.shops||[];box.querySelector('[name="staffId"]').innerHTML=options(staffOpts,x=>x.shop_name+' — '+x.display_name,'staff_id');
+  const dash=await api('/barber/dashboard'),staffOpts=dash.shops||[];box.querySelector('[name="staffId"]').innerHTML=options(staffOpts,x=>x.shop_name+' — Barber #'+x.staff_id,'staff_id');
   const from=new Date(Date.now()-30*86400000).toISOString().slice(0,10),to=today(),appts=[];
   for(const sh of staffOpts){const d=await api('/barber/appointments?from='+from+'&to='+to+'&shopId='+sh.shop_id);appts.push(...(d.appointments||[]));}
   const completed=appts.filter(a=>a.status==='COMPLETED');box.querySelector('[name="appointmentId"]').innerHTML=options(completed,a=>'#'+a.id+' · '+a.customer_name+' · '+a.service_name)||'<option value="">No completed appointments in last 30 days</option>';box.querySelector('#bp-barber-appt').innerHTML=options(appts,a=>'#'+a.id+' · '+a.customer_name+' · '+a.service_name)||'<option value="">No recent appointments</option>';
