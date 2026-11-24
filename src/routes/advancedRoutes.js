@@ -232,15 +232,35 @@ function createAdvancedRouter(pool,tokenService){
  r.get('/auth/totp/status',...authenticate,wrap(async(q,s)=>{if(!['ADMIN','BARBER'].includes(q.user.role))return s.sendStatus(403);const out=await pool.query('SELECT enabled FROM user_totp WHERE user_id=$1',[q.user.id]);s.json({enabled:Boolean(out.rows[0]?.enabled),requiredForPrivilegedLogin:process.env.TOTP_REQUIRED_FOR_PRIVILEGED==='true'});}));
  r.post('/auth/totp/enroll',...authenticate,wrap(async(q,s)=>{
   if(!['ADMIN','BARBER'].includes(q.user.role))return s.sendStatus(403);
-  const secret=generateSecret(),encrypted=encryptSecret(secret),out=await pool.query(`INSERT INTO user_totp(user_id,pending_secret_encrypted,enabled,updated_at) VALUES($1,$2,FALSE,NOW())
-   ON CONFLICT(user_id) DO UPDATE SET pending_secret_encrypted=EXCLUDED.pending_secret_encrypted,updated_at=NOW() RETURNING user_id`,[q.user.id,encrypted]);
-  s.json({secret,otpauthUri:otpauthUri(secret,q.user.email),message:'Add this account to an authenticator app, then verify a current six-digit code.'});
+  const secret=generateSecret(),encrypted=encryptSecret(secret),enrollmentToken=crypto.randomBytes(32).toString('base64url');
+  await pool.query(`INSERT INTO user_totp(user_id,pending_secret_encrypted,enrollment_token_hash,enrollment_expires_at,updated_at)
+   VALUES($1,$2,$3,NOW()+INTERVAL '10 minutes',NOW())
+   ON CONFLICT(user_id) DO UPDATE SET pending_secret_encrypted=EXCLUDED.pending_secret_encrypted,
+    enrollment_token_hash=EXCLUDED.enrollment_token_hash,enrollment_expires_at=EXCLUDED.enrollment_expires_at,updated_at=NOW()`,
+   [q.user.id,encrypted,crypto.createHash('sha256').update(enrollmentToken).digest('hex')]);
+  s.json({secret,enrollmentToken,otpauthUri:otpauthUri(secret,q.user.email),message:'Add this account to an authenticator app, then verify a current six-digit code.'});
  }));
- r.post('/auth/totp/verify-enrollment',...authenticate,wrap(async(q,s)=>{
-  const code=q.body?.code;if(!/^\d{6}$/.test(String(code||'')))return s.status(400).json({error:'Enter a six-digit authenticator code.'});
-  const out=await pool.query('SELECT pending_secret_encrypted FROM user_totp WHERE user_id=$1',[q.user.id]);if(!out.rows[0]?.pending_secret_encrypted)return s.status(409).json({error:'Start authenticator enrollment first.'});
-  if(!verifyTotp(decryptSecret(out.rows[0].pending_secret_encrypted),code))return s.status(400).json({error:'Authenticator code is invalid or expired.'});
-  await pool.query('UPDATE user_totp SET secret_encrypted=pending_secret_encrypted,pending_secret_encrypted=NULL,enabled=TRUE,updated_at=NOW() WHERE user_id=$1',[q.user.id]);s.json({enabled:true});
+ // One-time enrollment token is issued only after password verification; it cannot access any other API.
+ r.post('/auth/totp/verify-enrollment',wrap(async(q,s)=>{
+  const token=q.body?.enrollmentToken,code=q.body?.code;
+  if(typeof token!=='string'||token.length<32||!/^[0-9]{6}$/.test(String(code||'')))return s.status(400).json({error:'A valid enrollment token and six-digit authenticator code are required.'});
+  const tokenHash=crypto.createHash('sha256').update(token).digest('hex'),c=await pool.connect();
+  try{await c.query('BEGIN');
+   const found=await c.query(`SELECT t.user_id,t.pending_secret_encrypted,u.name,u.email,u.role
+    FROM user_totp t JOIN users u ON u.id=t.user_id
+    WHERE t.enrollment_token_hash=$1 AND t.enrollment_expires_at>NOW() AND u.is_active=TRUE
+    FOR UPDATE OF t`,[tokenHash]);
+   if(!found.rowCount){await c.query('ROLLBACK');return s.status(401).json({error:'Authenticator enrollment token expired. Sign in again.'});}
+   const x=found.rows[0],secret=decryptSecret(x.pending_secret_encrypted);
+   if(!verifyTotp(secret,code)){await c.query('ROLLBACK');return s.status(400).json({error:'Authenticator code is invalid or expired.'});}
+   await c.query(`UPDATE user_totp SET secret_encrypted=pending_secret_encrypted,pending_secret_encrypted=NULL,
+    enrollment_token_hash=NULL,enrollment_expires_at=NULL,enabled=TRUE,updated_at=NOW() WHERE user_id=$1`,[x.user_id]);
+   const user={id:x.user_id,name:x.name,email:x.email,role:x.role},pair=tokenService.issueTokenPair(user);
+   await c.query('INSERT INTO refresh_tokens(id,user_id,family_id,token_hash,expires_at) VALUES($1,$2,$3,$4,$5)',
+    [pair.refreshId,user.id,pair.familyId,pair.refreshTokenHash,pair.refreshExpiresAt]);
+   await c.query('COMMIT');
+   s.json({enabled:true,user,tokens:{accessToken:pair.accessToken,refreshToken:pair.refreshToken,tokenType:'Bearer',expiresIn:900,refreshExpiresAt:pair.refreshExpiresAt.toISOString()}});
+  }catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}
  }));
  r.post('/auth/totp/disable',...authenticate,wrap(async(q,s)=>{
   if(!['ADMIN','BARBER'].includes(q.user.role))return s.sendStatus(403);
