@@ -28,6 +28,6 @@ Admin configures sender IDs, templates and enabled channels through `PUT /api/ad
 
 The customer workspace adds a guided booking assistant. It lists services, checks live availability and creates a booking request for the signed-in customer. The shop still confirms bookings. WhatsApp webhook supports SERVICES and BOOK commands; customers must add their phone to their BarberPro profile. Configure Meta webhook URL `https://YOUR-DOMAIN/api/webhooks/whatsapp`, verify token and app secret. Meta webhook signature verification is mandatory.
 
-## Marathi
+## Workspace language support
 
-The workspace has a persistent English/मराठी language toggle and initial Marathi translations. The translation dictionary is incremental; review every screen and add missing copy before claiming full localization. Customer-entered and shop-configured content is not automatically translated.
+The authenticated workspace provides an in-app language selector for English, Hindi (हिन्दी) and Marathi (मराठी). The selected language is stored in the current browser's local storage (`bp_locale`) and applies on the next page load across the workspace, including dynamically rendered text and common form accessibility/placeholder labels. English is the default. Hindi and Marathi dictionaries cover the shared workspace navigation, authentication, booking, barber scheduling, payroll, messaging and common dashboard labels; any text not yet translated remains in English. Customer-entered names, notes, shop-configured content, service names and other database content are not machine-translated. Review and expand the dictionaries screen-by-screen before describing localization as complete.
