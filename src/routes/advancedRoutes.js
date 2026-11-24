@@ -1,10 +1,11 @@
 'use strict';
 const express=require('express');
+const rateLimit=require('express-rate-limit');
 const crypto=require('node:crypto');
 const argon2=require('argon2');
 const ExcelJS=require('exceljs');
 const {createAuthMiddleware}=require('../auth/middleware');
-const {generateSecret,encryptSecret,decryptSecret,verifyTotp,otpauthUri}=require('../advanced/totp');
+const {generateSecret,encryptSecret,decryptSecret,matchingTotpStep,verifyTotp,otpauthUri}=require('../advanced/totp');
 const {toCsv,parseCsv}=require('../advanced/csv');
 const {scheduleAppointmentReminders}=require('../messaging/reminders');
 
@@ -12,6 +13,7 @@ function createAdvancedRouter(pool,tokenService){
  const r=express.Router(),{authenticate,requireRole}=createAuthMiddleware(pool,tokenService);
  const customer=[authenticate,requireRole('CUSTOMER')],barber=[authenticate,requireRole('BARBER')],admin=[authenticate,requireRole('ADMIN')];
  const wrap=fn=>(q,s,n)=>Promise.resolve(fn(q,s,n)).catch(n);
+ const enrollmentLimiter=rateLimit({windowMs:15*60*1000,limit:10,standardHeaders:'draft-7',legacyHeaders:false,message:{error:'Too many authenticator verification attempts. Try again later.'}});
  const id=v=>/^[1-9]\d*$/.test(String(v))?Number(v):null;
  const validDate=v=>typeof v==='string'&&/^\d{4}-\d{2}-\d{2}$/.test(v)&&!Number.isNaN(Date.parse(v+'T00:00:00Z'))&&new Date(v+'T00:00:00Z').toISOString().slice(0,10)===v;
  const hmac=(secret,value)=>crypto.createHmac('sha256',secret).update(value).digest('hex');
@@ -253,6 +255,8 @@ function createAdvancedRouter(pool,tokenService){
  r.get('/auth/totp/status',...authenticate,wrap(async(q,s)=>{if(!['ADMIN','BARBER'].includes(q.user.role))return s.sendStatus(403);const out=await pool.query('SELECT enabled FROM user_totp WHERE user_id=$1',[q.user.id]);s.json({enabled:Boolean(out.rows[0]?.enabled),requiredForPrivilegedLogin:process.env.TOTP_REQUIRED_FOR_PRIVILEGED==='true'});}));
  r.post('/auth/totp/enroll',...authenticate,wrap(async(q,s)=>{
   if(!['ADMIN','BARBER'].includes(q.user.role))return s.sendStatus(403);
+  const existing=await pool.query('SELECT enabled FROM user_totp WHERE user_id=$1',[q.user.id]);
+  if(existing.rows[0]?.enabled)return s.status(409).json({error:'Authenticator is already enabled. Disable it with a current code before rotating the secret.'});
   const secret=generateSecret(),encrypted=encryptSecret(secret),enrollmentToken=crypto.randomBytes(32).toString('base64url');
   await pool.query(`INSERT INTO user_totp(user_id,pending_secret_encrypted,enrollment_token_hash,enrollment_expires_at,updated_at)
    VALUES($1,$2,$3,NOW()+INTERVAL '10 minutes',NOW())
@@ -262,7 +266,7 @@ function createAdvancedRouter(pool,tokenService){
   s.json({secret,enrollmentToken,otpauthUri:otpauthUri(secret,q.user.email),message:'Add this account to an authenticator app, then verify a current six-digit code.'});
  }));
  // One-time enrollment token is issued only after password verification; it cannot access any other API.
- r.post('/auth/totp/verify-enrollment',wrap(async(q,s)=>{
+ r.post('/auth/totp/verify-enrollment',enrollmentLimiter,wrap(async(q,s)=>{
   const token=q.body?.enrollmentToken,code=q.body?.code;
   if(typeof token!=='string'||token.length<32||!/^[0-9]{6}$/.test(String(code||'')))return s.status(400).json({error:'A valid enrollment token and six-digit authenticator code are required.'});
   const tokenHash=crypto.createHash('sha256').update(token).digest('hex'),c=await pool.connect();
@@ -272,10 +276,10 @@ function createAdvancedRouter(pool,tokenService){
     WHERE t.enrollment_token_hash=$1 AND t.enrollment_expires_at>NOW() AND u.is_active=TRUE
     FOR UPDATE OF t`,[tokenHash]);
    if(!found.rowCount){await c.query('ROLLBACK');return s.status(401).json({error:'Authenticator enrollment token expired. Sign in again.'});}
-   const x=found.rows[0],secret=decryptSecret(x.pending_secret_encrypted);
-   if(!verifyTotp(secret,code)){await c.query('ROLLBACK');return s.status(400).json({error:'Authenticator code is invalid or expired.'});}
+   const x=found.rows[0],secret=decryptSecret(x.pending_secret_encrypted),step=matchingTotpStep(secret,code);
+   if(step===null){await c.query('ROLLBACK');return s.status(400).json({error:'Authenticator code is invalid or expired.'});}
    await c.query(`UPDATE user_totp SET secret_encrypted=pending_secret_encrypted,pending_secret_encrypted=NULL,
-    enrollment_token_hash=NULL,enrollment_expires_at=NULL,enabled=TRUE,updated_at=NOW() WHERE user_id=$1`,[x.user_id]);
+    enrollment_token_hash=NULL,enrollment_expires_at=NULL,enabled=TRUE,last_verified_step=$2,updated_at=NOW() WHERE user_id=$1`,[x.user_id,step]);
    const user={id:x.user_id,name:x.name,email:x.email,role:x.role},pair=tokenService.issueTokenPair(user);
    await c.query('INSERT INTO refresh_tokens(id,user_id,family_id,token_hash,expires_at) VALUES($1,$2,$3,$4,$5)',
     [pair.refreshId,user.id,pair.familyId,pair.refreshTokenHash,pair.refreshExpiresAt]);
