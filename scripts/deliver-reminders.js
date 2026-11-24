@@ -4,7 +4,8 @@ const {Pool}=require('pg');
 const {deliver}=require('../src/messaging/delivery');
 const {offerWaitlistEntry}=require('../src/routes/retentionRoutes');
 const pool=new Pool({connectionString:process.env.DATABASE_URL,max:2});
-async function purgeExpiredReferencePhotos(){ await pool.query('DELETE FROM shop_appointment_reference_photos WHERE retention_until<=NOW()'); }\nasync function refillExpiredWaitlistOffers(){
+async function purgeExpiredReferencePhotos(){ await pool.query('DELETE FROM shop_appointment_reference_photos WHERE retention_until<=NOW()'); }
+async function refillExpiredWaitlistOffers(){
  const expired=await pool.query(`UPDATE shop_waitlist_entries SET status='EXPIRED',updated_at=NOW()
   WHERE status='OFFERED' AND offer_expires_at<=NOW() RETURNING shop_id,offered_from_appointment_id`);
  for(const row of expired.rows)if(row.offered_from_appointment_id){
@@ -67,7 +68,8 @@ async function queueRebookingAndReviewNudges(){
 }
 async function run(){
  if(!process.env.DATABASE_URL)throw new Error('DATABASE_URL is required');
- await purgeExpiredReferencePhotos();\n await refillExpiredWaitlistOffers();
+ await purgeExpiredReferencePhotos();
+ await refillExpiredWaitlistOffers();
  await queueMissingAppointmentReminders();
  await queueRebookingAndReviewNudges();
  const client=await pool.connect();let rows=[];
