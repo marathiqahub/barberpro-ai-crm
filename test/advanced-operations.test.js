@@ -9,7 +9,7 @@ test('TOTP matches the RFC 6238 SHA-1 test vector and accepts a bounded clock wi
  assert.equal(totpCode(secret,59000),'287082');
  assert.equal(verifyTotp(secret,'287082',59000,0),true);
  assert.equal(verifyTotp(secret,'287083',59000,0),false);
- assert.equal(verifyTotp(secret,totpCode(secret,89000),59000,1),false);
+ assert.equal(verifyTotp(secret,totpCode(secret,119000),59000,1),false);
 });
 
 test('TOTP secrets are encrypted with authenticated AES-GCM and round-trip only with the key',()=>{
@@ -30,6 +30,6 @@ test('CSV import parser handles quoted commas, escaped quotes and line breaks',(
 
 test('accounting CSV escapes formula-like text and preserves delimiters safely',()=>{
  const csv=toCsv([{'Party Name':'=SUM(1,2)','Voucher Number':'BP-"001"'}],['Party Name','Voucher Number']);
- assert.equal(parseCsv(csv)[0]['Party Name'],'=SUM(1,2)');
+ assert.equal(parseCsv(csv)[0]['Party Name'],"'=SUM(1,2)");
  assert.equal(parseCsv(csv)[0]['Voucher Number'],'BP-"001"');
 });
