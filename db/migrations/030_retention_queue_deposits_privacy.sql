@@ -191,3 +191,12 @@ CREATE INDEX IF NOT EXISTS ai_booking_proposal_expiry_idx
 ALTER TABLE shop_customer_reminders
   ADD COLUMN IF NOT EXISTS related_entity_type VARCHAR(30),
   ADD COLUMN IF NOT EXISTS related_entity_id BIGINT;
+
+ALTER TABLE shop_customer_rebooking_profiles
+  ADD COLUMN IF NOT EXISTS interval_source VARCHAR(10) NOT NULL DEFAULT 'AUTO'
+    CHECK (interval_source IN ('AUTO','MANUAL')),
+  ADD COLUMN IF NOT EXISTS last_nudge_at TIMESTAMPTZ;
+
+ALTER TABLE shop_stock_movements DROP CONSTRAINT IF EXISTS shop_stock_movements_movement_type_check;
+ALTER TABLE shop_stock_movements ADD CONSTRAINT shop_stock_movements_movement_type_check
+  CHECK (movement_type IN ('OPENING','PURCHASE','ADJUSTMENT','CONSUMPTION','RETURN','SALE'));
