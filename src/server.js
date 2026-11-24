@@ -9,6 +9,7 @@ const { createDashboardRouter } = require('./routes/dashboardRoutes');
 const { createPaymentRouter } = require('./routes/paymentRoutes');
 const { createOperatorRouter } = require('./routes/operatorRoutes');
 const { createAiRouter } = require('./routes/aiRoutes');
+const { createOperationsRouter } = require('./routes/operationsRoutes');
 const { loadAuthConfig } = require('./auth/config');
 const { createTokenService } = require('./auth/tokens');
 const { Pool } = require('pg');
@@ -63,6 +64,7 @@ app.use('/api/operator', createOperatorRouter(pool));
 app.use('/api', createBookingRouter(pool, bookingTokens));
 app.use('/api', createDashboardRouter(pool, bookingTokens));
 app.use('/api', createAiRouter(pool, bookingTokens));
+app.use('/api', createOperationsRouter(pool, bookingTokens));
 app.use('/api/payments', paymentRouter);
 
 app.post(
