@@ -46,9 +46,16 @@ function createBookingAssistantRouter(pool,tokens){
    RETURNING id,shop_id,staff_id,service_id,starts_at,ends_at,status`,[p.shop_id,p.staff_id,p.service_id,q.user.id,p.starts_at,p.ends_at]);
   if(!booked.rowCount){await client.query("UPDATE shop_ai_booking_proposals SET status='EXPIRED' WHERE id=$1",[proposalId]);await client.query('COMMIT');return s.status(409).json({error:'That slot was just booked. Please choose another.'});}
   await client.query("UPDATE shop_ai_booking_proposals SET status='CONFIRMED',appointment_id=$2 WHERE id=$1",[proposalId,booked.rows[0].id]);
+  const policy=await client.query('SELECT p.deposits_enabled,p.deposit_type,p.deposit_value,sv.price FROM shop_appointment_policies p JOIN services sv ON sv.shop_id=p.shop_id WHERE p.shop_id=$1 AND sv.id=$2',[p.shop_id,p.service_id]);
+  let deposit=null;
+  if(policy.rowCount&&policy.rows[0].deposits_enabled){
+   const cfg=policy.rows[0],amount=cfg.deposit_type==='FIXED'?Number(cfg.deposit_value):Math.round(Number(cfg.price)*100*Number(cfg.deposit_value)/100);
+   if(!Number.isSafeInteger(amount)||amount<100)throw Object.assign(new Error('The shop deposit policy is invalid. Contact the shop.'),{status:400});
+   const saved=await client.query("INSERT INTO appointment_extra_payments(appointment_id,customer_id,payment_type,amount_paise) VALUES($1,$2,'DEPOSIT',$3) RETURNING id,amount_paise,status",[booked.rows[0].id,q.user.id,amount]);deposit=saved.rows[0];
+  }
   await client.query('COMMIT');
   await scheduleAppointmentReminders(pool,{...booked.rows[0],customer_id:q.user.id});
-  s.status(201).json({appointment:booked.rows[0],message:'Booking request created after your confirmation. The shop can confirm it.'});
+  s.status(201).json({appointment:booked.rows[0],depositRequired:Boolean(deposit),deposit,message:'Booking request created after your confirmation. The shop can confirm it.'});
  }catch(e){await client.query('ROLLBACK');if(e.code==='23P01')return s.status(409).json({error:'That slot was just taken.'});n(e)}finally{client.release()}});
  return r;
 }
