@@ -494,6 +494,9 @@ function createOperationsRouter(pool, tokenService) {
          VALUES($1,$2,$3,'STATUS_CHANGED',$4,$5)`,
         [appointmentId,shopId,req.user.id,req.body.fromStatus,nextStatus]);
       await client.query('COMMIT');
+      if(nextStatus==='NO_SHOW')await pool.query(`INSERT INTO appointment_extra_payments(appointment_id,customer_id,payment_type,amount_paise)
+        SELECT a.id,a.customer_id,'NO_SHOW_FEE',p.no_show_fee_paise FROM appointments a JOIN shop_appointment_policies p ON p.shop_id=a.shop_id
+        WHERE a.id=$1 AND p.no_show_fee_paise>0 ON CONFLICT(appointment_id,payment_type) DO NOTHING`,[appointmentId]);
       const waitlistOffer = nextStatus==='CANCELLED' ? await offerNextWaitlist(pool,updated.rows[0]) : null;
       res.json({appointment:updated.rows[0],waitlistOffer});
     }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
