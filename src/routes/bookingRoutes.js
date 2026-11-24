@@ -335,7 +335,7 @@ function createBookingRouter(pool, tokenService) {
       [appointmentId, req.user.id, req.user.role]
     );
     if (!result.rowCount) return res.status(404).json({ error: 'Upcoming appointment not found or cannot be cancelled.' });
-    await pool.query("UPDATE shop_customer_reminders SET status='CANCELLED',processing_at=NULL WHERE appointment_id=$1 AND status IN ('PENDING','PROCESSING')",[appointmentId]);
+    try{await pool.query("UPDATE shop_customer_reminders SET status='CANCELLED',processing_at=NULL WHERE appointment_id=$1 AND status IN ('PENDING','PROCESSING')",[appointmentId]);}catch(error){if(error.code!=='42P01')throw error;}
     res.json({ appointment: result.rows[0] });
   }));
 
