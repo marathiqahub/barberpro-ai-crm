@@ -129,7 +129,13 @@ function createAdvancedRouter(pool,tokenService){
   const link=await razorpay('/payment_links','POST',{amount,currency:'INR',accept_partial:false,description:'BarberPro tip for appointment #'+appointmentId,customer:{name:a.name,email:a.email,contact:a.phone||undefined},notify:{sms:false,email:false},reminder_enable:false,reference_id:'tip_'+appointmentId+'_'+Date.now(),notes:{appointmentId:String(appointmentId),shopId:String(a.shop_id),barberStaffId:String(a.staff_id),customerId:String(a.customer_id),type:'BARBER_TIP'}});
   const saved=await pool.query(`INSERT INTO shop_barber_tips(shop_id,appointment_id,customer_id,staff_id,amount_paise,razorpay_payment_link_id,short_url,created_by)
    VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING id,amount_paise,short_url,status,created_at`,[a.shop_id,appointmentId,a.customer_id,a.staff_id,amount,link.id,link.short_url,q.user.id]);
-  s.status(201).json({tip:saved.rows[0],paymentLink:link.short_url,provider:'RAZORPAY',message:'Share this payment link with the customer. Payment is confirmed only by the Razorpay webhook.'});
+  await pool.query(`INSERT INTO shop_customer_reminders(shop_id,customer_id,appointment_id,channel,template_key,scheduled_at,dedupe_key,metadata)
+   SELECT $1,$2,$3,c.channel,'TIP_PAYMENT_LINK',NOW(),'tip:'||$4::text||':'||c.channel,jsonb_build_object('tipPaymentLink',$5)
+   FROM shop_message_consents c JOIN shop_messaging_settings m ON m.shop_id=c.shop_id AND c.channel=ANY(m.enabled_channels)
+   JOIN shop_message_templates t ON t.shop_id=c.shop_id AND t.channel=c.channel AND t.template_key='TIP_PAYMENT_LINK' AND t.is_active=TRUE
+   WHERE c.shop_id=$1 AND c.customer_id=$2 AND c.consent=TRUE AND c.revoked_at IS NULL
+   ON CONFLICT(dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`,[a.shop_id,a.customer_id,appointmentId,saved.rows[0].id,link.short_url]);
+  s.status(201).json({tip:saved.rows[0],paymentLink:link.short_url,provider:'RAZORPAY',message:'Payment link queued for opted-in channels with an active TIP_PAYMENT_LINK template; share the URL directly if no template is configured. Payment is confirmed only by the Razorpay webhook.'});
  }));
  r.get('/barber/tips',...barber,wrap(async(q,s)=>{
   const staff=await pool.query('SELECT id,shop_id FROM shop_staff WHERE user_id=$1 AND is_active=TRUE',[q.user.id]);
