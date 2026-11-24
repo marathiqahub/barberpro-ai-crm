@@ -13,7 +13,7 @@ function createCustomerExperienceRouter(pool, tokenService, options = {}) {
   const admin = [authenticate, requireRole('ADMIN')];
   const frontDesk = [authenticate, requireRole('ADMIN', 'FRONT_DESK')];
   const wrap = fn => (req,res,next) => Promise.resolve(fn(req,res,next)).catch(next);
-  const id = value => /^[1-9]\\d*$/.test(String(value)) && Number.isSafeInteger(Number(value)) ? Number(value) : null;
+  const id = value => /^[1-9]\d*$/.test(String(value)) && Number.isSafeInteger(Number(value)) ? Number(value) : null;
   const hash = value => crypto.createHash('sha256').update(value).digest('hex');
   const validUrl = value => { try { const u=new URL(value); return u.protocol==='https:' && u.username==='' && u.password===''; } catch { return false; } };
   async function shopAccess(user, shopId) {
@@ -62,7 +62,7 @@ function createCustomerExperienceRouter(pool, tokenService, options = {}) {
       FROM appointments a JOIN services sv ON sv.id=a.service_id JOIN shop_appointment_policies p ON p.shop_id=a.shop_id
       WHERE a.id=$1 AND a.customer_id=$2 AND a.status IN ('BOOKED','CONFIRMED')`,[appointmentId,req.user.id]);
     if(!found.rowCount||!found.rows[0].deposits_enabled)return res.status(404).json({error:'Deposit is not enabled for this appointment.'});
-    const a=found.rows[0],amount=Math.round(a.deposit_type==='FIXED'?Number(a.deposit_value):Number(a.price)*100*Number(a.deposit_value)/100);
+    const a=found.rows[0];
     const amountPaise=a.deposit_type==='FIXED'?Number(a.deposit_value):Math.round(Number(a.price)*100*Number(a.deposit_value)/100);
     if(!Number.isSafeInteger(amountPaise)||amountPaise<100)return res.status(400).json({error:'Configured deposit must be at least INR 1.'});
     let saved=await pool.query(`INSERT INTO appointment_extra_payments(appointment_id,customer_id,payment_type,amount_paise)
@@ -104,7 +104,7 @@ function createCustomerExperienceRouter(pool, tokenService, options = {}) {
 
   router.post('/customer/shops/:shopId/waitlist',...customer,wrap(async(req,res)=>{
     const shopId=id(req.params.shopId),serviceId=id(req.body?.serviceId),staffId=req.body?.preferredStaffId==null?null:id(req.body.preferredStaffId),date=req.body?.preferredDate;
-    if(!shopId||!serviceId||!/^\\d{4}-\\d{2}-\\d{2}$/.test(date||''))return res.status(400).json({error:'Provide a shop, service and preferred date.'});
+    if(!shopId||!serviceId||!/^\d{4}-\d{2}-\d{2}$/.test(date||''))return res.status(400).json({error:'Provide a shop, service and preferred date.'});
     const out=await pool.query(`INSERT INTO shop_waitlist_entries(shop_id,customer_id,service_id,preferred_staff_id,preferred_date,preferred_from,preferred_to)
       SELECT sh.id,$2,sv.id,$4,$5,$6,$7 FROM shops sh JOIN services sv ON sv.shop_id=sh.id
       WHERE sh.id=$1 AND sh.is_active=TRUE AND sv.id=$3 AND sv.is_active=TRUE
@@ -179,7 +179,7 @@ function createCustomerExperienceRouter(pool, tokenService, options = {}) {
       const link=review.rows[0]?.google_review_url;
       if(link){nextAction='GOOGLE_REVIEW';const consents=await pool.query("SELECT channel,destination FROM shop_message_consents WHERE shop_id=$1 AND customer_id=$2 AND consent=TRUE AND revoked_at IS NULL AND channel='WHATSAPP' LIMIT 1",[shopId,req.user.id]);if(consents.rowCount)await pool.query("INSERT INTO shop_customer_reminders(shop_id,customer_id,appointment_id,channel,template_key,scheduled_at) VALUES($1,$2,$3,$4,'GOOGLE_REVIEW_REQUEST',NOW()) ON CONFLICT DO NOTHING",[shopId,req.user.id,appointmentId,consents.rows[0].channel]);}
     }
-    res.status(201).json({feedback:saved.rows[0],nextAction});
+    res.status(201).json({feedback:saved.rows[0],nextAction,reviewUrl:nextAction==='GOOGLE_REVIEW'?(await pool.query('SELECT google_review_url FROM shop_appointment_policies WHERE shop_id=$1',[shopId])).rows[0]?.google_review_url||null:null});
   }));
 
   router.put('/customer/shops/:shopId/rebooking-preference',...customer,wrap(async(req,res)=>{
