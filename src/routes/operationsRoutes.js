@@ -2,6 +2,7 @@ const express = require('express');
 const argon2 = require('argon2');
 const crypto = require('node:crypto');
 const { createAuthMiddleware } = require('../auth/middleware');
+const { commissionForTaxableAmount, expectedCash, validateTenderAllocations } = require('../financial/calculations');
 
 function createOperationsRouter(pool, tokenService) {
   const router = express.Router();
@@ -117,7 +118,15 @@ function createOperationsRouter(pool, tokenService) {
         if(disc>gross){await client.query('ROLLBACK');return res.status(400).json({error:'Line discount cannot exceed its gross amount.'});}
         const base=gross-disc, tax=Math.round(base*rate/10000);
         const intra=profile.gst_registered && place===profile.state_code;
-        const line={description:item.description.trim(),hsn:item.hsnSacCode||null,quantity:qty,price,discount:disc,rate,base,cgst:intra?Math.floor(tax/2):0,sgst:intra?tax-Math.floor(tax/2):0,igst:profile.gst_registered&&!intra?tax:0,total:base+tax};
+        let staffId=null,commissionRate=0;
+        if(item.staffId!==undefined&&item.staffId!==null&&item.staffId!==''){
+          staffId=id(item.staffId);
+          if(!staffId){await client.query('ROLLBACK');return res.status(400).json({error:'Invalid barber assignment on invoice item.'});}
+          const staff=await client.query('SELECT commission_rate_bps FROM shop_staff WHERE id=$1 AND shop_id=$2 AND is_active=TRUE',[staffId,shopId]);
+          if(!staff.rowCount){await client.query('ROLLBACK');return res.status(400).json({error:'Invoice barber must be active at this shop.'});}
+          commissionRate=Number(staff.rows[0].commission_rate_bps);
+        }
+        const line={description:item.description.trim(),hsn:item.hsnSacCode||null,quantity:qty,price,discount:disc,rate,base,cgst:intra?Math.floor(tax/2):0,sgst:intra?tax-Math.floor(tax/2):0,igst:profile.gst_registered&&!intra?tax:0,total:base+tax,staffId,commissionRate,commission:commissionForTaxableAmount(base,commissionRate)};
         subtotal+=gross;discount+=disc;taxable+=base;cgst+=line.cgst;sgst+=line.sgst;igst+=line.igst;lines.push(line);
       }
       const total=taxable+cgst+sgst+igst, paid=b.amountPaidPaise||0;
@@ -125,18 +134,137 @@ function createOperationsRouter(pool, tokenService) {
       if(paid>total){await client.query('ROLLBACK');return res.status(400).json({error:'Amount paid cannot exceed invoice total.'});}
       const prefix=profile.invoice_prefix||'BP', invoiceNumber=await nextNumber(client,shopId,'INVOICE',fy,prefix);
       const mode=['CASH','UPI','CARD','RAZORPAY','MIXED','UNPAID'].includes(b.paymentMode)?b.paymentMode:(paid?'MIXED':'UNPAID');
+      if(mode==='MIXED'&&paid>0&&(!Array.isArray(b.paymentBreakdown)||!b.paymentBreakdown.length)){await client.query('ROLLBACK');return res.status(400).json({error:'Provide paymentBreakdown for mixed payments so each tender can be reconciled.'});}
       const inserted=await client.query(
         `INSERT INTO sales_invoices (shop_id,invoice_number,financial_year,document_type,issue_date,seller_gstin,seller_legal_name,seller_trade_name,seller_address,seller_state_code,customer_name,customer_email,customer_phone,customer_gstin,place_of_supply_state_code,subtotal_paise,discount_paise,taxable_paise,cgst_paise,sgst_paise,igst_paise,total_paise,amount_paid_paise,payment_mode,created_by)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25) RETURNING *`,
         [shopId,invoiceNumber,fy,docType,date,profile.gstin,profile.legal_name,profile.trade_name,profile.address,profile.state_code,b.customerName.trim(),b.customerEmail||null,b.customerPhone||null,b.customerGstin||null,place,subtotal,discount,taxable,cgst,sgst,igst,total,paid,mode,req.user.id]);
       const invoice=inserted.rows[0];
       for(const line of lines) await client.query(
-        `INSERT INTO sales_invoice_lines (invoice_id,description,hsn_sac_code,quantity,unit_price_paise,discount_paise,tax_rate_bps,taxable_paise,cgst_paise,sgst_paise,igst_paise,total_paise)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-        [invoice.id,line.description,line.hsn,line.quantity,line.price,line.discount,line.rate,line.base,line.cgst,line.sgst,line.igst,line.total]);
+        `INSERT INTO sales_invoice_lines (invoice_id,description,hsn_sac_code,quantity,unit_price_paise,discount_paise,tax_rate_bps,taxable_paise,cgst_paise,sgst_paise,igst_paise,total_paise,staff_id,commission_rate_bps,commission_paise)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+        [invoice.id,line.description,line.hsn,line.quantity,line.price,line.discount,line.rate,line.base,line.cgst,line.sgst,line.igst,line.total,line.staffId,line.commissionRate,line.commission]);
+      const allocations=Array.isArray(b.paymentBreakdown)?b.paymentBreakdown:[];
+      if(allocations.length){
+        const methods=['CASH','UPI','CARD','RAZORPAY'];
+        let allocated=0;
+        for(const payment of allocations){
+          if(!methods.includes(payment.method)||!Number.isSafeInteger(payment.amountPaise)||payment.amountPaise<1||
+             (payment.reference!==undefined&&(typeof payment.reference!=='string'||payment.reference.length>120))){
+            await client.query('ROLLBACK');return res.status(400).json({error:'Each payment allocation needs a supported method and positive amount.'});
+          }
+          allocated+=payment.amountPaise;
+        }
+        if(!validateTenderAllocations(allocations,paid)){await client.query('ROLLBACK');return res.status(400).json({error:'Payment allocations must add up exactly to amountPaidPaise.'});}
+        for(const payment of allocations) await client.query(
+          `INSERT INTO sales_invoice_payments(invoice_id,method,amount_paise,reference,received_by)
+           VALUES($1,$2,$3,$4,$5)`,
+          [invoice.id,payment.method,payment.amountPaise,payment.reference||null,req.user.id]);
+      } else if(paid>0 && mode!=='MIXED') {
+        await client.query(
+          `INSERT INTO sales_invoice_payments(invoice_id,method,amount_paise,received_by)
+           VALUES($1,$2,$3,$4)`,
+          [invoice.id,mode,paid,req.user.id]);
+      }
       await client.query('COMMIT');
       res.status(201).json({invoice});
     } catch(error){await client.query('ROLLBACK');throw error;} finally{client.release();}
+  }));
+
+
+  router.get('/shops/:shopId/invoices', ...frontDesk, asyncRoute(async(req,res)=>{
+    const shopId=id(req.params.shopId),from=req.query.from,to=req.query.to;
+    if(!shopId||!validDate(from)||!validDate(to)||from>to||
+       (new Date(to+'T00:00:00Z')-new Date(from+'T00:00:00Z'))/86400000>366)
+      return res.status(400).json({error:'Provide a valid shop and date range of at most one year.'});
+    if(!await shopAccess(req.user,shopId))return res.status(404).json({error:'Shop not found.'});
+    const result=await pool.query(
+      `SELECT i.id,i.invoice_number,i.document_type,i.issue_date,i.customer_name,i.subtotal_paise,
+       i.discount_paise,i.taxable_paise,i.cgst_paise,i.sgst_paise,i.igst_paise,i.total_paise,
+       i.amount_paid_paise,i.payment_mode,i.status,
+       COALESCE((SELECT SUM(p.amount_paise) FROM sales_invoice_payments p WHERE p.invoice_id=i.id),0)::bigint allocated_paid_paise
+       FROM sales_invoices i WHERE i.shop_id=$1 AND i.issue_date BETWEEN $2::date AND $3::date
+       ORDER BY i.issue_date DESC,i.id DESC LIMIT 1000`,[shopId,from,to]);
+    res.json({invoices:result.rows});
+  }));
+
+  router.get('/invoices/:invoiceId', ...frontDesk, asyncRoute(async(req,res)=>{
+    const invoiceId=id(req.params.invoiceId);
+    if(!invoiceId)return res.status(400).json({error:'Invalid invoice ID.'});
+    const result=await pool.query('SELECT * FROM sales_invoices WHERE id=$1',[invoiceId]);
+    if(!result.rowCount||!await shopAccess(req.user,Number(result.rows[0].shop_id)))return res.status(404).json({error:'Invoice not found.'});
+    const [lines,payments,credits]=await Promise.all([
+      pool.query('SELECT * FROM sales_invoice_lines WHERE invoice_id=$1 ORDER BY id',[invoiceId]),
+      pool.query('SELECT method,amount_paise,reference,received_at FROM sales_invoice_payments WHERE invoice_id=$1 ORDER BY id',[invoiceId]),
+      pool.query('SELECT * FROM sales_credit_notes WHERE invoice_id=$1 ORDER BY issue_date,id',[invoiceId])
+    ]);
+    res.json({invoice:result.rows[0],lines:lines.rows,payments:payments.rows,creditNotes:credits.rows});
+  }));
+
+
+  router.put('/admin/shops/:shopId/staff/:staffId/commission', ...admin, asyncRoute(async(req,res)=>{
+    const shopId=id(req.params.shopId),staffId=id(req.params.staffId),rate=req.body?.commissionRateBps;
+    if(!shopId||!staffId||!Number.isInteger(rate)||rate<0||rate>10000)
+      return res.status(400).json({error:'Commission rate must be a whole number from 0 to 10000 basis points.'});
+    const result=await pool.query(
+      `UPDATE shop_staff SET commission_rate_bps=$3
+       WHERE shop_id=$1 AND id=$2 AND is_active=TRUE
+       RETURNING id,shop_id,display_name,commission_rate_bps`,[shopId,staffId,rate]);
+    if(!result.rowCount)return res.status(404).json({error:'Active barber not found in this shop.'});
+    res.json({staff:result.rows[0]});
+  }));
+
+  router.get('/admin/shops/:shopId/staff-earnings', ...admin, asyncRoute(async(req,res)=>{
+    const shopId=id(req.params.shopId),from=req.query.from,to=req.query.to;
+    if(!shopId||!validDate(from)||!validDate(to)||from>to)return res.status(400).json({error:'Provide a valid shop and date range.'});
+    const result=await pool.query(
+      `SELECT st.id staff_id,st.display_name,
+       COUNT(DISTINCT i.id)::int invoice_count,
+       COALESCE(SUM(l.taxable_paise),0)::bigint service_sales_paise,
+       COALESCE(SUM(l.commission_paise),0)::bigint commission_paise
+       FROM sales_invoice_lines l JOIN sales_invoices i ON i.id=l.invoice_id
+       JOIN shop_staff st ON st.id=l.staff_id
+       WHERE i.shop_id=$1 AND st.shop_id=$1 AND i.issue_date BETWEEN $2::date AND $3::date
+         AND i.status='ISSUED'
+       GROUP BY st.id,st.display_name ORDER BY commission_paise DESC,st.display_name`,
+      [shopId,from,to]);
+    res.json({shopId,from,to,staffEarnings:result.rows});
+  }));
+
+  router.post('/shops/:shopId/daily-close', ...frontDesk, asyncRoute(async(req,res)=>{
+    const shopId=id(req.params.shopId),b=req.body||{},date=b.businessDate;
+    const amounts=['openingFloatPaise','cashRefundsPaise','cashPaidOutPaise','cashDepositedPaise','cashCountedPaise'];
+    if(!shopId||!validDate(date)||amounts.some(k=>!Number.isSafeInteger(b[k])||b[k]<0)||
+       (b.note!==undefined&&(typeof b.note!=='string'||b.note.length>1000)))
+      return res.status(400).json({error:'Provide a business date and non-negative whole-paise cash figures.'});
+    if(!await shopAccess(req.user,shopId))return res.status(404).json({error:'Shop not found.'});
+    const cash=await pool.query(
+      `SELECT COALESCE(SUM(p.amount_paise),0)::bigint cash_received_paise
+       FROM sales_invoice_payments p JOIN sales_invoices i ON i.id=p.invoice_id
+       JOIN shops s ON s.id=i.shop_id
+       WHERE i.shop_id=$1 AND p.method='CASH'
+         AND (p.received_at AT TIME ZONE s.timezone)::date=$2::date
+         AND i.status='ISSUED'`,[shopId,date]);
+    const received=Number(cash.rows[0].cash_received_paise);
+    let expected;
+    try{expected=expectedCash({openingFloatPaise:b.openingFloatPaise,cashReceivedPaise:received,cashRefundsPaise:b.cashRefundsPaise,cashPaidOutPaise:b.cashPaidOutPaise,cashDepositedPaise:b.cashDepositedPaise});}
+    catch(error){return res.status(400).json({error:error.message});}
+    try{
+      const result=await pool.query(
+        `INSERT INTO shop_daily_closures
+         (shop_id,business_date,opening_float_paise,cash_refunds_paise,cash_paid_out_paise,cash_deposited_paise,cash_counted_paise,expected_cash_paise,variance_paise,note,closed_by)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING *`,
+        [shopId,date,b.openingFloatPaise,b.cashRefundsPaise,b.cashPaidOutPaise,b.cashDepositedPaise,b.cashCountedPaise,expected,b.cashCountedPaise-expected,b.note||null,req.user.id]);
+      res.status(201).json({closure:result.rows[0],cashReceivedPaise:received});
+    }catch(error){if(error.code==='23505')return res.status(409).json({error:'This shop and business date have already been closed.'});throw error;}
+  }));
+
+  router.get('/shops/:shopId/daily-close', ...frontDesk, asyncRoute(async(req,res)=>{
+    const shopId=id(req.params.shopId),date=req.query.businessDate;
+    if(!shopId||!validDate(date))return res.status(400).json({error:'Provide shopId and businessDate.'});
+    if(!await shopAccess(req.user,shopId))return res.status(404).json({error:'Shop not found.'});
+    const result=await pool.query('SELECT * FROM shop_daily_closures WHERE shop_id=$1 AND business_date=$2::date',[shopId,date]);
+    res.json({closure:result.rows[0]||null});
   }));
 
   router.post('/invoices/:invoiceId/credit-notes', ...frontDesk, asyncRoute(async(req,res)=>{
@@ -162,6 +290,47 @@ function createOperationsRouter(pool, tokenService) {
         [inv.shop_id,invoiceId,number,fy,reason,taxable,cgst,sgst,igst,amount,req.user.id]);
       await client.query('COMMIT');res.status(201).json({creditNote:result.rows[0]});
     }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
+  }));
+
+
+  router.get('/shops/:shopId/gst-returns/summary', ...admin, asyncRoute(async(req,res)=>{
+    const shopId=id(req.params.shopId),from=req.query.from,to=req.query.to;
+    if(!shopId||!validDate(from)||!validDate(to)||from>to)return res.status(400).json({error:'Provide a valid shop and date range.'});
+    const shop=await pool.query('SELECT id FROM shops WHERE id=$1 AND is_active=TRUE',[shopId]);
+    if(!shop.rowCount)return res.status(404).json({error:'Active shop not found.'});
+    const result=await pool.query(
+      `SELECT
+       COALESCE(SUM(i.taxable_paise),0)::bigint invoice_taxable_paise,
+       COALESCE(SUM(i.cgst_paise),0)::bigint invoice_cgst_paise,
+       COALESCE(SUM(i.sgst_paise),0)::bigint invoice_sgst_paise,
+       COALESCE(SUM(i.igst_paise),0)::bigint invoice_igst_paise,
+       COALESCE(SUM(i.total_paise),0)::bigint invoice_total_paise,
+       (SELECT COALESCE(SUM(c.taxable_paise),0)::bigint FROM sales_credit_notes c JOIN sales_invoices ci ON ci.id=c.invoice_id
+         WHERE ci.document_type='TAX_INVOICE' AND c.shop_id=$1 AND c.issue_date BETWEEN $2::date AND $3::date) credit_taxable_paise,
+       (SELECT COALESCE(SUM(c.cgst_paise),0)::bigint FROM sales_credit_notes c JOIN sales_invoices ci ON ci.id=c.invoice_id
+         WHERE ci.document_type='TAX_INVOICE' AND c.shop_id=$1 AND c.issue_date BETWEEN $2::date AND $3::date) credit_cgst_paise,
+       (SELECT COALESCE(SUM(c.sgst_paise),0)::bigint FROM sales_credit_notes c JOIN sales_invoices ci ON ci.id=c.invoice_id
+         WHERE ci.document_type='TAX_INVOICE' AND c.shop_id=$1 AND c.issue_date BETWEEN $2::date AND $3::date) credit_sgst_paise,
+       (SELECT COALESCE(SUM(c.igst_paise),0)::bigint FROM sales_credit_notes c JOIN sales_invoices ci ON ci.id=c.invoice_id
+         WHERE ci.document_type='TAX_INVOICE' AND c.shop_id=$1 AND c.issue_date BETWEEN $2::date AND $3::date) credit_igst_paise,
+       (SELECT COALESCE(SUM(c.total_paise),0)::bigint FROM sales_credit_notes c JOIN sales_invoices ci ON ci.id=c.invoice_id
+         WHERE ci.document_type='TAX_INVOICE' AND c.shop_id=$1 AND c.issue_date BETWEEN $2::date AND $3::date) credit_total_paise
+       FROM sales_invoices i
+       WHERE i.shop_id=$1 AND i.issue_date BETWEEN $2::date AND $3::date
+         AND i.document_type='TAX_INVOICE' AND i.status='ISSUED'`,
+      [shopId,from,to]);
+    const x=result.rows[0];
+    const net=(a,b)=>String(Number(x[a])-Number(x[b]));
+    res.json({shopId,from,to,filingStatus:'PREPARATION_ONLY',filingPerformed:false,summary:{
+      invoiceTaxablePaise:x.invoice_taxable_paise,invoiceCgstPaise:x.invoice_cgst_paise,
+      invoiceSgstPaise:x.invoice_sgst_paise,invoiceIgstPaise:x.invoice_igst_paise,invoiceTotalPaise:x.invoice_total_paise,
+      creditTaxablePaise:x.credit_taxable_paise,creditCgstPaise:x.credit_cgst_paise,
+      creditSgstPaise:x.credit_sgst_paise,creditIgstPaise:x.credit_igst_paise,creditTotalPaise:x.credit_total_paise,
+      netTaxablePaise:net('invoice_taxable_paise','credit_taxable_paise'),
+      netCgstPaise:net('invoice_cgst_paise','credit_cgst_paise'),
+      netSgstPaise:net('invoice_sgst_paise','credit_sgst_paise'),
+      netIgstPaise:net('invoice_igst_paise','credit_igst_paise')
+    }});
   }));
 
   router.get('/shops/:shopId/gst-returns/export', ...admin, asyncRoute(async(req,res)=>{
