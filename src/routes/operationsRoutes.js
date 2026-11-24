@@ -199,6 +199,19 @@ function createOperationsRouter(pool, tokenService) {
     res.json({invoice:result.rows[0],lines:lines.rows,payments:payments.rows,creditNotes:credits.rows});
   }));
 
+
+  router.put('/admin/shops/:shopId/staff/:staffId/commission', ...admin, asyncRoute(async(req,res)=>{
+    const shopId=id(req.params.shopId),staffId=id(req.params.staffId),rate=req.body?.commissionRateBps;
+    if(!shopId||!staffId||!Number.isInteger(rate)||rate<0||rate>10000)
+      return res.status(400).json({error:'Commission rate must be a whole number from 0 to 10000 basis points.'});
+    const result=await pool.query(
+      `UPDATE shop_staff SET commission_rate_bps=$3
+       WHERE shop_id=$1 AND id=$2 AND is_active=TRUE
+       RETURNING id,shop_id,display_name,commission_rate_bps`,[shopId,staffId,rate]);
+    if(!result.rowCount)return res.status(404).json({error:'Active barber not found in this shop.'});
+    res.json({staff:result.rows[0]});
+  }));
+
   router.get('/admin/shops/:shopId/staff-earnings', ...admin, asyncRoute(async(req,res)=>{
     const shopId=id(req.params.shopId),from=req.query.from,to=req.query.to;
     if(!shopId||!validDate(from)||!validDate(to)||from>to)return res.status(400).json({error:'Provide a valid shop and date range.'});
