@@ -88,12 +88,17 @@ async function mountCustomer(){
  bookings.closest('.panel')?.after(panel);if(!panel.isConnected)bookings.parentElement.append(panel);
  const shop=book.shopId,service=book.serviceId;
  async function loadOptions(){
-  const [services,staff,appointments,waitlist,policy]=await Promise.all([api('/shops/'+shop.value+'/services'),api('/shops/'+shop.value+'/staff'),api('/appointments/mine'),api('/customer/waitlist'),api('/shops/'+shop.value+'/booking-policy')]);
+  const [services,staff,appointments,waitlist,policy,profile]=await Promise.all([api('/shops/'+shop.value+'/services'),api('/shops/'+shop.value+'/staff'),api('/appointments/mine'),api('/customer/waitlist'),api('/shops/'+shop.value+'/booking-policy'),api('/customer/shops/'+shop.value+'/preferences')]);
   const deposit=policy.policy.deposit_enabled?(policy.policy.deposit_type==='PERCENT'?'Deposit: '+(Number(policy.policy.deposit_value)/100).toFixed(2)+'%':'Fixed deposit: '+money(Number(policy.policy.deposit_value)/100)):'No booking deposit required';panel.querySelector('#bp-cancel-policy').textContent=deposit+' · Cancellation notice: '+policy.policy.cancellation_notice_hours+' hours. '+(policy.policy.policy_text||'');
   const sf=panel.querySelector('[name=preferredServiceId]'),st=panel.querySelector('[name=preferredStaffId]'),wf=panel.querySelector('#bp-waitlist-form [name=serviceId]'),wt=panel.querySelector('#bp-waitlist-form [name=preferredStaffId]');
   sf.innerHTML='<option value="">No preference</option>'+services.services.map(x=>'<option value="'+x.id+'">'+esc(x.name)+'</option>').join('');
   wf.innerHTML=services.services.map(x=>'<option value="'+x.id+'">'+esc(x.name)+'</option>').join('');
   st.innerHTML='<option value="">No preference</option>'+staff.staff.map(x=>'<option value="'+x.id+'">'+esc(x.display_name)+'</option>').join('');
+  const saved=profile.profile||{},profileForm=panel.querySelector('#bp-profile-form');
+  profileForm.preferredStaffId.value=saved.preferred_staff_id||'';profileForm.preferredServiceId.value=saved.preferred_service_id||'';
+  profileForm.preferredIntervalDays.value=saved.preferred_interval_days||21;profileForm.profileNotesConsent.checked=Boolean(saved.profile_notes_consent);
+  profileForm.skinNotes.value=saved.skin_notes||'';profileForm.allergyNotes.value=saved.allergy_notes||'';
+  profileForm.photoConsent.checked=Boolean(saved.photo_consent);profileForm.beforePhotoUrl.value=saved.before_photo_url||'';profileForm.afterPhotoUrl.value=saved.after_photo_url||'';
   wt.innerHTML='<option value="">Any barber</option>'+staff.staff.map(x=>'<option value="'+x.id+'">'+esc(x.display_name)+'</option>').join('');
   const done=appointments.appointments.filter(x=>x.status==='COMPLETED');
   panel.querySelector('#bp-review-form [name=appointmentId]').innerHTML=done.map(x=>'<option value="'+x.id+'">'+esc(x.service_name)+' · '+esc(x.shop_name)+' · '+esc(String(x.starts_at).slice(0,10))+'</option>').join('');
