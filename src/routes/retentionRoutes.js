@@ -139,6 +139,14 @@ function createRetentionRouter(pool, tokens) {
       nextUp:next.map(x=>({ticket:'#'+x.id,service:x.service_name,barber:x.barber_name,startsAt:x.starts_at}))});
   }));
 
+  r.get('/customer/shops/:shopId/preferences',...customer,wrap(async(q,s)=>{
+    const shop=id(q.params.shopId);if(!shop)return s.status(400).json({error:'Invalid shop id.'});
+    const x=await pool.query(`SELECT p.*,
+      COALESCE((SELECT e.consent FROM shop_customer_consent_events e WHERE e.shop_id=p.shop_id AND e.customer_id=p.customer_id
+        AND e.purpose='PROFILE_NOTES' ORDER BY e.recorded_at DESC LIMIT 1),FALSE) profile_notes_consent
+      FROM shop_customer_profiles p WHERE p.shop_id=$1 AND p.customer_id=$2`,[shop,q.user.id]);
+    s.json({profile:x.rows[0]||null});
+  }));
   r.put('/customer/shops/:shopId/preferences',...customer,wrap(async(q,s)=>{
     const shop=id(q.params.shopId),b=q.body||{},staff=b.preferredStaffId==null?null:id(b.preferredStaffId),service=b.preferredServiceId==null?null:id(b.preferredServiceId);
     if(!shop||(b.preferredStaffId!=null&&!staff)||(b.preferredServiceId!=null&&!service)||
