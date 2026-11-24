@@ -15,6 +15,8 @@ function createBookingAssistantRouter(pool,tokens){
  SELECT sh.id,st.id,sv.id,$4,$5,$5+make_interval(mins=>sv.duration_minutes),'BOOKED' FROM shops sh JOIN shop_staff st ON st.shop_id=sh.id JOIN services sv ON sv.shop_id=sh.id
  WHERE sh.id=$1 AND sh.is_active=TRUE AND st.id=$3 AND st.is_active=TRUE AND sv.id=$2 AND sv.is_active=TRUE AND $5>NOW()
  AND (NOT EXISTS(SELECT 1 FROM staff_services ss WHERE ss.staff_id=st.id) OR EXISTS(SELECT 1 FROM staff_services ss WHERE ss.staff_id=st.id AND ss.service_id=sv.id))
+ AND EXISTS(SELECT 1 FROM staff_working_hours wh WHERE wh.staff_id=st.id AND wh.day_of_week=EXTRACT(DOW FROM ($5 AT TIME ZONE sh.timezone))::int AND wh.is_active=TRUE AND ($5 AT TIME ZONE sh.timezone)::time>=wh.opens_at AND (($5 AT TIME ZONE sh.timezone)::time+make_interval(mins=>sv.duration_minutes))<=wh.closes_at)
+ AND NOT EXISTS(SELECT 1 FROM staff_time_off t WHERE t.staff_id=st.id AND tstzrange(t.starts_at,t.ends_at,'[)')&&tstzrange($5,$5+make_interval(mins=>sv.duration_minutes),'[)'))
  RETURNING id,shop_id,staff_id,service_id,starts_at,ends_at,status`,[shop,service,staff,q.user.id,start.toISOString()]);
  if(!out.rowCount)return s.status(409).json({error:'The selected barber or service is unavailable. Refresh availability and try again.'});s.status(201).json({appointment:out.rows[0],message:'Booking request created. The shop can confirm it in BarberPro.'});
  }catch(e){if(e.code==='23P01')return s.status(409).json({error:'That time was just booked. Please choose another slot.'});n(e)}});
