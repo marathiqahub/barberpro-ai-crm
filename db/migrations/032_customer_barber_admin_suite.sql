@@ -118,6 +118,7 @@ CREATE TABLE IF NOT EXISTS user_totp (
   secret_encrypted TEXT,
   pending_secret_encrypted TEXT,
   enabled BOOLEAN NOT NULL DEFAULT FALSE,
+  last_verified_step BIGINT,
   enrollment_token_hash CHAR(64),
   enrollment_expires_at TIMESTAMPTZ,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
