@@ -14,7 +14,7 @@ function createBookingAssistantRouter(pool,tokens){
  r.post('/ai/booking-assistant/book',...customer,async(q,s,n)=>{const b=q.body||{},shop=Number(b.shopId),service=Number(b.serviceId),staff=Number(b.staffId),start=new Date(b.startsAt);if(![shop,service,staff].every(Number.isSafeInteger)||Number.isNaN(start.getTime()))return s.status(400).json({error:'Choose a valid shop, service, barber and available time.'});try{
  const out=await pool.query(`INSERT INTO appointments(shop_id,staff_id,service_id,customer_id,starts_at,ends_at,status)
  SELECT sh.id,st.id,sv.id,$4,$5,$5+make_interval(mins=>sv.duration_minutes),'BOOKED' FROM shops sh JOIN shop_staff st ON st.shop_id=sh.id JOIN services sv ON sv.shop_id=sh.id
- WHERE sh.id=$1 AND sh.is_active=TRUE AND st.id=$3 AND st.is_active=TRUE AND sv.id=$2 AND sv.is_active=TRUE AND $5>NOW()
+ WHERE sh.id=$1 AND sh.is_active=TRUE AND st.id=$3 AND st.is_active=TRUE AND sv.id=$2 AND sv.is_active=TRUE AND $5>NOW() AND EXTRACT(MINUTE FROM ($5 AT TIME ZONE sh.timezone))::int % 15=0 AND EXTRACT(SECOND FROM ($5 AT TIME ZONE sh.timezone))=0
  AND (NOT EXISTS(SELECT 1 FROM staff_services ss WHERE ss.staff_id=st.id) OR EXISTS(SELECT 1 FROM staff_services ss WHERE ss.staff_id=st.id AND ss.service_id=sv.id))
  AND EXISTS(SELECT 1 FROM staff_working_hours wh WHERE wh.staff_id=st.id AND wh.day_of_week=EXTRACT(DOW FROM ($5 AT TIME ZONE sh.timezone))::int AND wh.is_active=TRUE AND ($5 AT TIME ZONE sh.timezone)::time>=wh.opens_at AND (($5 AT TIME ZONE sh.timezone)::time+make_interval(mins=>sv.duration_minutes))<=wh.closes_at)
  AND NOT EXISTS(SELECT 1 FROM staff_time_off t WHERE t.staff_id=st.id AND tstzrange(t.starts_at,t.ends_at,'[)')&&tstzrange($5,$5+make_interval(mins=>sv.duration_minutes),'[)'))
