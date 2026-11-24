@@ -295,6 +295,8 @@ function createAdvancedRouter(pool,tokenService){
  r.get('/subscription-plans',...authenticate,wrap(async(q,s)=>{const out=await pool.query('SELECT id,code,name,billing_period,amount_paise,feature_entitlements FROM barberpro_subscription_plans WHERE is_active=TRUE ORDER BY amount_paise');s.json({plans:out.rows});}));
  r.post('/admin/subscription-plans',...admin,wrap(async(q,s)=>{
   const b=q.body||{},code=String(b.code||'').toLowerCase(),name=String(b.name||'').trim(),period=b.billingPeriod,amount=Number(b.amountPaise),features=b.featureEntitlements||{};
+  if(!features||typeof features!=='object'||Array.isArray(features))return s.status(400).json({error:'featureEntitlements must be a JSON object of boolean feature flags.'});
+  if(Object.values(features).some(value=>typeof value!=='boolean'))return s.status(400).json({error:'Every feature entitlement must be a boolean.'});
   if(!/^[a-z0-9_-]{2,40}$/.test(code)||!name||name.length>120||!['MONTHLY','YEARLY'].includes(period)||!Number.isSafeInteger(amount)||amount<100)return s.status(400).json({error:'Provide plan code, name, MONTHLY/YEARLY period and amountPaise.'});
   const plan=await razorpay('/plans','POST',{period:period==='MONTHLY'?'monthly':'yearly',interval:1,item:{name,amount,currency:'INR',description:'BarberPro '+name}});
   const saved=await pool.query(`INSERT INTO barberpro_subscription_plans(code,name,billing_period,amount_paise,razorpay_plan_id,feature_entitlements)
@@ -342,6 +344,7 @@ function createAdvancedRouter(pool,tokenService){
   const shopId=id(q.params.shopId),locale=q.params.locale,key=String(q.params.templateKey||''),b=q.body||{};
   if(!shopId||!['en','hi','mr'].includes(locale)||!/^([A-Z0-9_]{2,40})$/.test(key)||!['EMAIL','SMS','WHATSAPP'].includes(b.channel)||typeof b.body!=='string'||!b.body.trim()||b.body.length>5000)
    return s.status(400).json({error:'Provide a valid shop, template key, locale, channel and body.'});
+  if(!await featureEnabled(shopId,'MESSAGING_LOCALIZATION'))return s.status(403).json({error:'Localized messaging is not included in this shop subscription.'});
   const status=['PENDING','APPROVED','REJECTED'].includes(b.providerTemplateStatus)?b.providerTemplateStatus:'PENDING';
   if(b.channel==='WHATSAPP'&&(!b.providerTemplateName||!b.providerTemplateLanguage))return s.status(400).json({error:'WhatsApp translations need the exact Meta template name and language code.'});
   const out=await pool.query(`INSERT INTO shop_message_template_translations(shop_id,channel,template_key,locale,subject,body,provider_template_name,provider_template_language,provider_template_status,provider_approval_reference,updated_by)
