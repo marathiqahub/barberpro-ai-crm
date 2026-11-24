@@ -21,7 +21,7 @@ function createAdvancedRouter(pool,tokenService){
  async function shopAccess(user,shopId){if(user.role==='ADMIN')return true;const q=await pool.query('SELECT 1 FROM shop_staff WHERE shop_id=$1 AND user_id=$2 AND is_active=TRUE',[shopId,user.id]);return q.rowCount>0;}
  async function featureEnabled(shopId,feature){
   const sub=await pool.query(`SELECT p.feature_entitlements FROM shop_subscriptions ss JOIN barberpro_subscription_plans p ON p.id=ss.plan_id
-   WHERE ss.shop_id=$1 AND ss.status IN('ACTIVE','AUTHENTICATED') ORDER BY ss.created_at DESC LIMIT 1`,[shopId]);
+   WHERE ss.shop_id=$1 AND ss.status='ACTIVE' ORDER BY ss.created_at DESC LIMIT 1`,[shopId]);
   if(!sub.rowCount)return true; // Existing shops remain in legacy/trial mode until subscription activation.
   return sub.rows[0].feature_entitlements?.[feature]===true;
  }
@@ -152,7 +152,7 @@ function createAdvancedRouter(pool,tokenService){
  // Barber shift changes are requests only. Admin approval writes dated overrides or time-off records and an audit event.
  r.post('/barber/shift-requests',...barber,wrap(async(q,s)=>{
   const staffId=id(q.body?.staffId),targetId=q.body?.targetStaffId? id(q.body.targetStaffId):null,type=q.body?.requestType,workDate=q.body?.workDate,reason=String(q.body?.reason||'').slice(0,500);
-  if(!staffId||!['TIME_OFF','SWAP'].includes(type)||!validDate(workDate)||(type==='SWAP'&&!targetId)||(type==='TIME_OFF'&&targetId))return s.status(400).json({error:'Provide staffId, requestType, workDate and a targetStaffId only for swaps.'});
+  if(!staffId||!['TIME_OFF','SWAP'].includes(type)||!validDate(workDate)||workDate<new Date().toISOString().slice(0,10)||(type==='SWAP'&&!targetId)||(type==='TIME_OFF'&&targetId))return s.status(400).json({error:'Provide staffId, requestType, workDate and a targetStaffId only for swaps.'});
   const staff=await barberStaff(q.user,staffId);if(!staff)return s.sendStatus(404);
   if(!await featureEnabled(staff.shop_id,'WORKFORCE'))return s.status(403).json({error:'Shift management is not included in this shop subscription.'});
   if(targetId){const target=await pool.query('SELECT id FROM shop_staff WHERE id=$1 AND shop_id=$2 AND is_active=TRUE',[targetId,staff.shop_id]);if(!target.rowCount)return s.status(400).json({error:'Target barber must be active in the same shop.'});}
@@ -314,6 +314,7 @@ function createAdvancedRouter(pool,tokenService){
   if(!features||typeof features!=='object'||Array.isArray(features))return s.status(400).json({error:'featureEntitlements must be a JSON object of boolean feature flags.'});
   if(Object.values(features).some(value=>typeof value!=='boolean'))return s.status(400).json({error:'Every feature entitlement must be a boolean.'});
   if(!/^[a-z0-9_-]{2,40}$/.test(code)||!name||name.length>120||!['MONTHLY','YEARLY'].includes(period)||!Number.isSafeInteger(amount)||amount<100)return s.status(400).json({error:'Provide plan code, name, MONTHLY/YEARLY period and amountPaise.'});
+  if((await pool.query('SELECT 1 FROM barberpro_subscription_plans WHERE code=$1',[code])).rowCount)return s.status(409).json({error:'A plan with this code already exists.'});
   const plan=await razorpay('/plans','POST',{period:period==='MONTHLY'?'monthly':'yearly',interval:1,item:{name,amount,currency:'INR',description:'BarberPro '+name}});
   const saved=await pool.query(`INSERT INTO barberpro_subscription_plans(code,name,billing_period,amount_paise,razorpay_plan_id,feature_entitlements)
     VALUES($1,$2,$3,$4,$5,$6::jsonb) RETURNING *`,[code,name,period,amount,plan.id,JSON.stringify(features)]);
@@ -321,6 +322,7 @@ function createAdvancedRouter(pool,tokenService){
  }));
  r.post('/admin/shops/:shopId/subscription',...admin,wrap(async(q,s)=>{
   const shopId=id(q.params.shopId),planId=id(q.body?.planId);if(!shopId||!planId)return s.status(400).json({error:'Valid shopId and planId are required.'});
+  if((await pool.query("SELECT 1 FROM shop_subscriptions WHERE shop_id=$1 AND status IN('CREATED','AUTHENTICATED','ACTIVE','PENDING') LIMIT 1",[shopId])).rowCount)return s.status(409).json({error:'This shop already has a pending or active subscription.'});
   const [shop,plan]=await Promise.all([pool.query('SELECT id,name FROM shops WHERE id=$1 AND is_active=TRUE',[shopId]),pool.query('SELECT * FROM barberpro_subscription_plans WHERE id=$1 AND is_active=TRUE',[planId])]);
   if(!shop.rowCount||!plan.rowCount||!plan.rows[0].razorpay_plan_id)return s.status(404).json({error:'Active shop or configured Razorpay plan not found.'});
   const sub=await razorpay('/subscriptions','POST',{plan_id:plan.rows[0].razorpay_plan_id,total_count:plan.rows[0].billing_period==='YEARLY'?5:60,quantity:1,customer_notify:0,notes:{shopId:String(shopId),planId:String(planId),shopName:shop.rows[0].name}});
