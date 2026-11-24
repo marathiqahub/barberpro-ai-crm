@@ -48,7 +48,7 @@ async function run(){
    FROM shop_customer_reminders r JOIN users u ON u.id=r.customer_id JOIN shops sh ON sh.id=r.shop_id
    JOIN shop_message_templates t ON t.shop_id=r.shop_id AND t.channel=r.channel AND t.template_key=r.template_key AND t.is_active=TRUE
    LEFT JOIN shop_messaging_settings m ON m.shop_id=r.shop_id
-   WHERE r.status='PENDING' AND r.channel IN ('EMAIL','SMS','WHATSAPP') AND r.scheduled_at<=NOW()
+   WHERE r.status='PENDING' AND r.channel IN ('EMAIL','SMS','WHATSAPP') AND r.scheduled_at<=NOW() AND (r.channel<>'WHATSAPP' OR t.provider_template_status='APPROVED')
    ORDER BY r.scheduled_at,r.id LIMIT 25 FOR UPDATE OF r SKIP LOCKED`);
   rows=result.rows;for(const row of rows)await client.query("UPDATE shop_customer_reminders SET status='PROCESSING',processing_at=NOW() WHERE id=$1",[row.id]);
   await client.query('COMMIT');
@@ -64,7 +64,7 @@ async function run(){
     if(!consent.rowCount)throw Object.assign(new Error('No active consent for this channel'),{code:'CONSENT_REQUIRED'});
    }
    const body=String(row.body).replace(/\{\{shop_name\}\}/g,row.shop_name).replace(/\{\{customer_name\}\}/g,row.customer_name);
-   const sent=await deliver(row.channel,destination,{subject:row.subject,body},process.env,global.fetch,{provider:row.whatsapp_provider,phoneNumberId:row.whatsapp_phone_number_id,from:row.channel==='SMS'?row.sms_from:row.channel==='EMAIL'?row.sender_email:null,templateName:row.provider_template_name});
+   const sent=await deliver(row.channel,destination,{subject:row.subject,body},process.env,global.fetch,{provider:row.whatsapp_provider,phoneNumberId:row.whatsapp_phone_number_id,from:row.channel==='SMS'?row.sms_from:row.channel==='EMAIL'?row.sender_email:null,templateName:row.provider_template_name,templateLanguage:row.provider_template_language,templateStatus:row.provider_template_status});
    await pool.query("UPDATE shop_customer_reminders SET status='SENT',sent_at=NOW(),processing_at=NULL,provider_reference=$2 WHERE id=$1",[row.id,sent.reference]);
    await pool.query("INSERT INTO shop_message_delivery_attempts(reminder_id,shop_id,channel,destination,provider,status,provider_reference) VALUES($1,$2,$3,$4,$5,'SENT',$6)",[row.id,row.shop_id,row.channel,destination,sent.provider,sent.reference]);
   }catch(e){
