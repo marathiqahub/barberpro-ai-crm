@@ -109,6 +109,130 @@ function createOperatorRouter(pool) {
     }
   });
 
+  // Secure, repeat-safe-by-conflict batch provisioning for additional workspaces.
+  // All users, shops, memberships and activation tokens are created atomically.
+  router.post('/provision-workspace', requireOperator, async (req, res, next) => {
+    const body = req.body || {};
+    const admin = body.admin || {};
+    const shops = body.shops;
+    const cleanPart = value => typeof value === 'string' ? value.trim() : '';
+    const emailPattern = /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/;
+    const validPerson = person => {
+      const firstName = cleanPart(person?.firstName);
+      const lastName = cleanPart(person?.lastName);
+      const email = cleanPart(person?.email).toLowerCase();
+      return firstName.length > 0 && firstName.length <= 80 &&
+        lastName.length > 0 && lastName.length <= 80 &&
+        email.length <= 254 && emailPattern.test(email)
+        ? { firstName, lastName, name: firstName + ' ' + lastName, email }
+        : null;
+    };
+    const normalizedAdmin = validPerson(admin);
+    if (!normalizedAdmin || !Array.isArray(shops) || shops.length < 1 || shops.length > 10) {
+      return res.status(400).json({ error: 'Provide one valid admin and between 1 and 10 shops, each with one barber.' });
+    }
+    const normalizedShops = [];
+    for (const item of shops) {
+      const barber = validPerson(item?.barber);
+      const name = cleanPart(item?.name);
+      const slug = cleanPart(item?.slug).toLowerCase();
+      const timezone = cleanPart(item?.timezone) || 'Asia/Kolkata';
+      if (!name || name.length > 160 || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug) ||
+          timezone.length > 80 || !barber) {
+        return res.status(400).json({ error: 'Each shop needs a valid name, unique URL-safe slug, timezone and barber identity.' });
+      }
+      normalizedShops.push({ name, slug, timezone, barber });
+    }
+    const emails = [normalizedAdmin.email, ...normalizedShops.map(item => item.barber.email)];
+    const slugs = normalizedShops.map(item => item.slug);
+    if (new Set(emails).size !== emails.length || new Set(slugs).size !== slugs.length) {
+      return res.status(400).json({ error: 'Emails and shop slugs must be unique within the request.' });
+    }
+
+    let client;
+    try {
+      client = await pool.connect();
+      await client.query('BEGIN');
+      await client.query("SELECT pg_advisory_xact_lock(hashtext('barberpro:operator:provision-workspace'))");
+      const existingUsers = await client.query('SELECT email FROM users WHERE email = ANY($1::text[])', [emails]);
+      if (existingUsers.rowCount) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: 'One or more email addresses already belong to an account.', existingEmails: existingUsers.rows.map(row => row.email) });
+      }
+      const existingShops = await client.query('SELECT slug FROM shops WHERE slug = ANY($1::text[])', [slugs]);
+      if (existingShops.rowCount) {
+        await client.query('ROLLBACK');
+        return res.status(409).json({ error: 'One or more shop slugs already exist.', existingSlugs: existingShops.rows.map(row => row.slug) });
+      }
+      for (const shop of normalizedShops) {
+        const validTimezone = await client.query('SELECT 1 FROM pg_timezone_names WHERE name = $1', [shop.timezone]);
+        if (!validTimezone.rowCount) {
+          await client.query('ROLLBACK');
+          return res.status(400).json({ error: 'Each shop timezone must be a valid IANA timezone.' });
+        }
+      }
+
+      const createdUsers = [];
+      const createUser = async (person, role) => {
+        const placeholder = crypto.randomBytes(48).toString('base64url');
+        const passwordHash = await argon2.hash(placeholder, passwordHashOptions);
+        const result = await client.query(
+          `INSERT INTO users (name, email, password_hash, role, is_active)
+           VALUES ($1, $2, $3, $4, FALSE)
+           RETURNING id, name, email, role`,
+          [person.name, person.email, passwordHash, role]
+        );
+        createdUsers.push(result.rows[0]);
+        return result.rows[0];
+      };
+      const adminUser = await createUser(normalizedAdmin, 'ADMIN');
+      const createdShops = [];
+      for (const item of normalizedShops) {
+        const barberUser = await createUser(item.barber, 'BARBER');
+        const shopResult = await client.query(
+          `INSERT INTO shops (name, slug, timezone)
+           VALUES ($1, $2, $3)
+           RETURNING id, name, slug, timezone`,
+          [item.name, item.slug, item.timezone]
+        );
+        const shop = shopResult.rows[0];
+        const membership = await client.query(
+          `INSERT INTO shop_staff (shop_id, user_id, display_name)
+           VALUES ($1, $2, $3)
+           RETURNING id, shop_id, user_id, display_name, is_active`,
+          [shop.id, barberUser.id, barberUser.name]
+        );
+        createdShops.push({ shop, barber: barberUser, membership: membership.rows[0] });
+      }
+
+      const activations = [];
+      for (const user of createdUsers) {
+        const token = crypto.randomBytes(32).toString('base64url');
+        const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+        const expiresAt = new Date(Date.now() + activationTtlHours * 60 * 60 * 1000);
+        await client.query(
+          'INSERT INTO account_activation_tokens (user_id, token_hash, expires_at) VALUES ($1, $2, $3)',
+          [user.id, tokenHash, expiresAt]
+        );
+        activations.push({ name: user.name, email: user.email, role: user.role, token, expiresAt: expiresAt.toISOString() });
+      }
+      await client.query('COMMIT');
+      return res.status(201).json({
+        message: 'Workspace provisioned. Each activation token is displayed once and must be shared privately with its account holder.',
+        activationEndpoint: '/api/operator/activate',
+        admin: adminUser,
+        shops: createdShops,
+        activationTokens: activations
+      });
+    } catch (error) {
+      if (client) await client.query('ROLLBACK').catch(() => {});
+      if (error.code === '23505') return res.status(409).json({ error: 'A conflicting account, shop or membership already exists. No records were committed.' });
+      return next(error);
+    } finally {
+      if (client) client.release();
+    }
+  });
+
   router.post('/activate', activationLimiter, async (req, res, next) => {
     const { token, password } = req.body ?? {};
     if (typeof token !== 'string' || !/^[A-Za-z0-9_-]{40,100}$/.test(token) ||
