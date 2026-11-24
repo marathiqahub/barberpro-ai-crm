@@ -304,10 +304,10 @@ function createBookingRouter(pool, tokenService) {
          RETURNING id, shop_id, staff_id, service_id, customer_id, starts_at, ends_at, status, customer_notes, created_at`,
         [shopId, staffId, serviceId, req.user.id, new Date(startMs).toISOString(), slot.rows[0].duration_minutes, customerNotes, depositDuePaise]
       );
-      const policy=await client.query('SELECT deposits_enabled,deposit_type,deposit_value FROM shop_appointment_policies WHERE shop_id=$1',[shopId]);
+      const legacyPolicy=await client.query('SELECT deposits_enabled,deposit_type,deposit_value FROM shop_appointment_policies WHERE shop_id=$1',[shopId]);
       let deposit=null;
-      if(policy.rowCount&&policy.rows[0].deposits_enabled){
-        const p=policy.rows[0],amount=p.deposit_type==='FIXED'?Number(p.deposit_value):Math.round(Number(slot.rows[0].price)*100*Number(p.deposit_value)/100);
+      if(legacyPolicy.rowCount&&legacyPolicy.rows[0].deposits_enabled){
+        const p=legacyPolicy.rows[0],amount=p.deposit_type==='FIXED'?Number(p.deposit_value):Math.round(Number(slot.rows[0].price)*100*Number(p.deposit_value)/100);
         if(!Number.isSafeInteger(amount)||amount<100)throw Object.assign(new Error('The shop deposit policy is invalid. Contact the shop before booking.'),{status:400});
         const savedDeposit=await client.query("INSERT INTO appointment_extra_payments(appointment_id,customer_id,payment_type,amount_paise) VALUES($1,$2,'DEPOSIT',$3) RETURNING id,amount_paise,status",[inserted.rows[0].id,req.user.id,amount]);
         deposit=savedDeposit.rows[0];

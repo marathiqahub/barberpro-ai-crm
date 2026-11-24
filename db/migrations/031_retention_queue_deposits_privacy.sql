@@ -68,6 +68,64 @@ CREATE TABLE IF NOT EXISTS shop_waitlist_entries (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   CHECK (preferred_to IS NULL OR preferred_from IS NULL OR preferred_to > preferred_from)
 );
+-- 030_growth_queue_privacy.sql is the canonical initial waitlist schema.
+-- Keep both generations of column names in sync while older and newer
+-- application paths are being consolidated.
+ALTER TABLE shop_waitlist_entries
+  ADD COLUMN IF NOT EXISTS preferred_date DATE,
+  ADD COLUMN IF NOT EXISTS preferred_from TIME,
+  ADD COLUMN IF NOT EXISTS preferred_to TIME;
+
+UPDATE shop_waitlist_entries
+SET preferred_date=COALESCE(preferred_date,requested_date),
+    preferred_from=COALESCE(preferred_from,preferred_time_start),
+    preferred_to=COALESCE(preferred_to,preferred_time_end)
+WHERE preferred_date IS NULL
+   OR preferred_from IS DISTINCT FROM preferred_time_start
+   OR preferred_to IS DISTINCT FROM preferred_time_end;
+
+CREATE OR REPLACE FUNCTION sync_shop_waitlist_legacy_window()
+RETURNS TRIGGER LANGUAGE plpgsql AS $body$
+BEGIN
+  IF TG_OP='INSERT' THEN
+    NEW.requested_date := COALESCE(NEW.requested_date,NEW.preferred_date);
+    NEW.preferred_date := COALESCE(NEW.preferred_date,NEW.requested_date);
+    NEW.preferred_time_start := COALESCE(NEW.preferred_time_start,NEW.preferred_from);
+    NEW.preferred_from := COALESCE(NEW.preferred_from,NEW.preferred_time_start);
+    NEW.preferred_time_end := COALESCE(NEW.preferred_time_end,NEW.preferred_to);
+    NEW.preferred_to := COALESCE(NEW.preferred_to,NEW.preferred_time_end);
+  ELSE
+    IF NEW.requested_date IS DISTINCT FROM OLD.requested_date
+       AND NEW.preferred_date IS NOT DISTINCT FROM OLD.preferred_date THEN
+      NEW.preferred_date := NEW.requested_date;
+    ELSIF NEW.preferred_date IS DISTINCT FROM OLD.preferred_date
+       AND NEW.requested_date IS NOT DISTINCT FROM OLD.requested_date THEN
+      NEW.requested_date := NEW.preferred_date;
+    END IF;
+    IF NEW.preferred_time_start IS DISTINCT FROM OLD.preferred_time_start
+       AND NEW.preferred_from IS NOT DISTINCT FROM OLD.preferred_from THEN
+      NEW.preferred_from := NEW.preferred_time_start;
+    ELSIF NEW.preferred_from IS DISTINCT FROM OLD.preferred_from
+       AND NEW.preferred_time_start IS NOT DISTINCT FROM OLD.preferred_time_start THEN
+      NEW.preferred_time_start := NEW.preferred_from;
+    END IF;
+    IF NEW.preferred_time_end IS DISTINCT FROM OLD.preferred_time_end
+       AND NEW.preferred_to IS NOT DISTINCT FROM OLD.preferred_to THEN
+      NEW.preferred_to := NEW.preferred_time_end;
+    ELSIF NEW.preferred_to IS DISTINCT FROM OLD.preferred_to
+       AND NEW.preferred_time_end IS NOT DISTINCT FROM OLD.preferred_time_end THEN
+      NEW.preferred_time_end := NEW.preferred_to;
+    END IF;
+  END IF;
+  RETURN NEW;
+END $body$;
+
+DROP TRIGGER IF EXISTS shop_waitlist_window_compatibility ON shop_waitlist_entries;
+CREATE TRIGGER shop_waitlist_window_compatibility
+BEFORE INSERT OR UPDATE OF requested_date,preferred_date,preferred_time_start,preferred_from,preferred_time_end,preferred_to
+ON shop_waitlist_entries
+FOR EACH ROW EXECUTE FUNCTION sync_shop_waitlist_legacy_window();
+
 CREATE INDEX IF NOT EXISTS waitlist_match_idx
   ON shop_waitlist_entries(shop_id,service_id,preferred_date,status,created_at);
 
@@ -168,7 +226,7 @@ CREATE TABLE IF NOT EXISTS shop_data_rights_requests (
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS data_rights_requests_idx
-  ON shop_data_rights_requests(shop_id,status,created_at);
+  ON shop_data_rights_requests(shop_id,status,requested_at);
 
 CREATE TABLE IF NOT EXISTS shop_ai_booking_proposals (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -40,7 +40,7 @@ function createBookingAssistantRouter(pool,tokens){
   const proposal=await client.query("SELECT * FROM shop_ai_booking_proposals WHERE id=$1 AND customer_id=$2 AND status='PROPOSED' AND expires_at>NOW() FOR UPDATE",[proposalId,q.user.id]);
   if(!proposal.rowCount){await client.query('ROLLBACK');return s.status(404).json({error:'This proposal expired. Please choose another live slot.'});}
   const p=proposal.rows[0];
-  const booked=await client.query(\`INSERT INTO appointments(shop_id,staff_id,service_id,customer_id,starts_at,ends_at,status)
+  const booked=await client.query(`INSERT INTO appointments(shop_id,staff_id,service_id,customer_id,starts_at,ends_at,status)
    SELECT sh.id,st.id,sv.id,$4,$5,$6,'BOOKED'
    FROM shops sh JOIN shop_staff st ON st.shop_id=sh.id JOIN services sv ON sv.shop_id=sh.id
    WHERE sh.id=$1 AND sh.is_active=TRUE AND st.id=$2 AND st.is_active=TRUE AND sv.id=$3 AND sv.is_active=TRUE AND $5>NOW()
@@ -48,7 +48,7 @@ function createBookingAssistantRouter(pool,tokens){
     AND (NOT EXISTS(SELECT 1 FROM staff_services ss WHERE ss.staff_id=st.id) OR EXISTS(SELECT 1 FROM staff_services ss WHERE ss.staff_id=st.id AND ss.service_id=sv.id))
     AND NOT EXISTS(SELECT 1 FROM staff_time_off t WHERE t.staff_id=st.id AND tstzrange(t.starts_at,t.ends_at,'[)')&&tstzrange($5,$6,'[)'))
     AND NOT EXISTS(SELECT 1 FROM appointments a WHERE a.staff_id=st.id AND a.status IN('BOOKED','CONFIRMED','IN_PROGRESS') AND tstzrange(a.starts_at,a.ends_at,'[)')&&tstzrange($5,$6,'[)'))
-   RETURNING id,shop_id,staff_id,service_id,starts_at,ends_at,status\`,[p.shop_id,p.staff_id,p.service_id,q.user.id,p.starts_at,p.ends_at]);
+   RETURNING id,shop_id,staff_id,service_id,starts_at,ends_at,status`,[p.shop_id,p.staff_id,p.service_id,q.user.id,p.starts_at,p.ends_at]);
   if(!booked.rowCount){await client.query("UPDATE shop_ai_booking_proposals SET status='EXPIRED' WHERE id=$1",[proposalId]);await client.query('COMMIT');return s.status(409).json({error:'That slot was just booked. Please choose another.'});}
   await client.query("UPDATE shop_ai_booking_proposals SET status='CONFIRMED',appointment_id=$2 WHERE id=$1",[proposalId,booked.rows[0].id]);
   const policy=await client.query('SELECT p.deposits_enabled,p.deposit_type,p.deposit_value,sv.price FROM shop_appointment_policies p JOIN services sv ON sv.shop_id=p.shop_id WHERE p.shop_id=$1 AND sv.id=$2',[p.shop_id,p.service_id]);
