@@ -1,5 +1,6 @@
 'use strict';
-async function deliver(channel,destination,content,env=process.env,fetchImpl=global.fetch,meta={}){\n if(channel==='WHATSAPP'&&!meta.templateName&&!meta.allowFreeform)throw Object.assign(new Error('An approved WhatsApp template is required for scheduled messages'),{code:'APPROVED_TEMPLATE_REQUIRED'});
+async function deliver(channel,destination,content,env=process.env,fetchImpl=global.fetch,meta={}){
+ if(channel==='WHATSAPP'&&!meta.templateName&&!meta.allowFreeform)throw Object.assign(new Error('An approved WhatsApp template is required for scheduled messages'),{code:'APPROVED_TEMPLATE_REQUIRED'});
  if(channel==='EMAIL'){
   if(!env.RESEND_API_KEY)throw Object.assign(new Error('RESEND_API_KEY is not configured'),{code:'PROVIDER_NOT_CONFIGURED'});
   const response=await fetchImpl('https://api.resend.com/emails',{method:'POST',headers:{Authorization:'Bearer '+env.RESEND_API_KEY,'Content-Type':'application/json'},body:JSON.stringify({from:meta.from||env.MAIL_FROM,to:[destination],subject:content.subject||'BarberPro appointment reminder',html:content.body})});
