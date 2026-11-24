@@ -190,6 +190,27 @@ function createOperationsRouter(pool, tokenService) {
     !Number.isNaN(Date.parse(value + 'T00:00:00Z')) &&
     new Date(value + 'T00:00:00Z').toISOString().slice(0,10) === value;
 
+
+  router.get('/front-desk/shops', ...frontDeskRoles, asyncRoute(async(req,res)=>{
+    if(req.user.role==='ADMIN'){
+      const all=await pool.query('SELECT id,name,timezone FROM shops WHERE is_active=TRUE ORDER BY name');
+      return res.json({shops:all.rows});
+    }
+    const assigned=await pool.query(
+      `SELECT s.id,s.name,s.timezone FROM shops s JOIN shop_front_desk f ON f.shop_id=s.id
+       WHERE f.user_id=$1 AND f.is_active=TRUE AND s.is_active=TRUE ORDER BY s.name`,[req.user.id]);
+    res.json({shops:assigned.rows});
+  }));
+
+  router.get('/front-desk/customers', ...frontDeskRoles, asyncRoute(async(req,res)=>{
+    const q=typeof req.query.q==='string'?req.query.q.trim():'';
+    if(q.length<2||q.length>100) return res.status(400).json({error:'Search with at least 2 characters.'});
+    const result=await pool.query(
+      `SELECT id,name,email FROM users WHERE role='CUSTOMER' AND is_active=TRUE
+       AND (name ILIKE $1 OR email ILIKE $1) ORDER BY name LIMIT 20`,['%'+q+'%']);
+    res.json({customers:result.rows});
+  }));
+
   router.get('/front-desk/appointments', ...frontDeskRoles, asyncRoute(async(req,res)=>{
     const shopId=id(req.query.shopId), from=req.query.from, to=req.query.to;
     if(!shopId || !validDate(from) || !validDate(to) || from>to ||
