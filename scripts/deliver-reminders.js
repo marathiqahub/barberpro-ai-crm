@@ -19,7 +19,7 @@ async function queueMissingAppointmentReminders(){
   INSERT INTO shop_customer_reminders(shop_id,customer_id,appointment_id,channel,template_key,scheduled_at,dedupe_key)
   SELECT a.shop_id,a.customer_id,a.id,c.channel,rt.template_key,
     GREATEST(NOW(),a.starts_at-make_interval(hours=>rt.hours_before)),
-    'appointment:'||a.id||':'||c.channel||':'||rt.template_key
+    'appointment:'||a.id::text||':'||c.channel||':'||rt.template_key
   FROM appointments a JOIN shop_message_consents c ON c.shop_id=a.shop_id AND c.customer_id=a.customer_id
   JOIN shop_messaging_settings m ON m.shop_id=a.shop_id AND c.channel=ANY(m.enabled_channels)
   JOIN reminder_types rt ON TRUE
@@ -55,7 +55,7 @@ async function queueRebookingAndReviewNudges(){
   ON CONFLICT(dedupe_key) WHERE dedupe_key IS NOT NULL DO NOTHING`);
  await pool.query(`INSERT INTO shop_customer_reminders(shop_id,customer_id,appointment_id,channel,template_key,scheduled_at,dedupe_key)
   SELECT a.shop_id,a.customer_id,a.id,c.channel,'REVIEW_REQUEST',NOW(),
-    'review:'||a.id||':'||c.channel
+    'review:'||a.id::text||':'||c.channel
   FROM appointments a JOIN shop_booking_policies bp ON bp.shop_id=a.shop_id AND bp.review_requests_enabled=TRUE
   JOIN shop_message_consents c ON c.shop_id=a.shop_id AND c.customer_id=a.customer_id
   JOIN shop_messaging_settings m ON m.shop_id=a.shop_id AND c.channel=ANY(m.enabled_channels)
