@@ -14,14 +14,15 @@ async function run(){
    JOIN shop_message_templates t ON t.shop_id=r.shop_id AND t.channel=r.channel AND t.template_key=r.template_key AND t.is_active=TRUE
    LEFT JOIN shop_messaging_settings m ON m.shop_id=r.shop_id
    WHERE r.status='PENDING' AND r.scheduled_at<=NOW()
-   ORDER BY r.scheduled_at,r.id FOR UPDATE OF r SKIP LOCKED LIMIT 25`);
+   ORDER BY r.scheduled_at,r.id LIMIT 25 FOR UPDATE OF r SKIP LOCKED`);
   rows=result.rows;for(const row of rows)await client.query("UPDATE shop_customer_reminders SET status='PROCESSING',processing_at=NOW() WHERE id=$1",[row.id]);
   await client.query('COMMIT');
  }catch(e){await client.query('ROLLBACK');throw e}finally{client.release()}
  for(const row of rows){
   let destination=row.channel==='EMAIL'?row.email:row.phone;
   try{
-   if(!row.enabled_channels?.includes(row.channel))throw Object.assign(new Error('This channel is not enabled for the shop'),{code:'CHANNEL_DISABLED'});\n   if(!destination)throw Object.assign(new Error('Customer has no destination for this channel'),{code:'NO_DESTINATION'});
+   if(!row.enabled_channels?.includes(row.channel))throw Object.assign(new Error('This channel is not enabled for the shop'),{code:'CHANNEL_DISABLED'});
+   if(!destination)throw Object.assign(new Error('Customer has no destination for this channel'),{code:'NO_DESTINATION'});
    {
     const consent=await pool.query(`SELECT 1 FROM shop_message_consents WHERE shop_id=$1 AND customer_id=$2 AND channel=$3 AND destination=$4 AND consent=TRUE AND revoked_at IS NULL`,[row.shop_id,row.customer_id,row.channel,destination]);
     if(!consent.rowCount)throw Object.assign(new Error('No active consent for this channel'),{code:'CONSENT_REQUIRED'});
