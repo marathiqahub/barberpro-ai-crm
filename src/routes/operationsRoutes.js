@@ -351,7 +351,8 @@ function createOperationsRouter(pool, tokenService) {
     const header=['Document kind','Document number','Date','Document type','Customer','Customer GSTIN','Place of supply state code','HSN/SAC','Description','Quantity','Tax rate (basis points)','Taxable value (paise)','CGST (paise)','SGST (paise)','IGST (paise)','Total (paise)'];
     const lines=[header,...docs.rows.map(r=>[r.document_kind,r.document_number,r.issue_date,r.document_type,r.customer_name,r.customer_gstin,r.place_of_supply_state_code,r.hsn_sac_code,r.description,r.quantity,r.tax_rate_bps,r.taxable_paise,r.cgst_paise,r.sgst_paise,r.igst_paise,r.total_paise])];
     res.set('Content-Type','text/csv; charset=utf-8');res.set('Content-Disposition',`attachment; filename="barberpro-gst-sales-register-${from}-to-${to}.csv"`);
-    res.send('\uFEFF'+lines.map(row=>row.map(csv).join(',')).join('\\r\\n'));
+    res.send('\uFEFF'+lines.map(row=>row.map(csv).join(',')).join('\\r
+'));
   }));
 
   // Phase 1: shop-scoped front-desk calendar and walk-in operations.
