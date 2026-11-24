@@ -117,7 +117,15 @@ function createOperationsRouter(pool, tokenService) {
         if(disc>gross){await client.query('ROLLBACK');return res.status(400).json({error:'Line discount cannot exceed its gross amount.'});}
         const base=gross-disc, tax=Math.round(base*rate/10000);
         const intra=profile.gst_registered && place===profile.state_code;
-        const line={description:item.description.trim(),hsn:item.hsnSacCode||null,quantity:qty,price,discount:disc,rate,base,cgst:intra?Math.floor(tax/2):0,sgst:intra?tax-Math.floor(tax/2):0,igst:profile.gst_registered&&!intra?tax:0,total:base+tax};
+        let staffId=null,commissionRate=0;
+        if(item.staffId!==undefined&&item.staffId!==null&&item.staffId!==''){
+          staffId=id(item.staffId);
+          if(!staffId){await client.query('ROLLBACK');return res.status(400).json({error:'Invalid barber assignment on invoice item.'});}
+          const staff=await client.query('SELECT commission_rate_bps FROM shop_staff WHERE id=$1 AND shop_id=$2 AND is_active=TRUE',[staffId,shopId]);
+          if(!staff.rowCount){await client.query('ROLLBACK');return res.status(400).json({error:'Invoice barber must be active at this shop.'});}
+          commissionRate=Number(staff.rows[0].commission_rate_bps);
+        }
+        const line={description:item.description.trim(),hsn:item.hsnSacCode||null,quantity:qty,price,discount:disc,rate,base,cgst:intra?Math.floor(tax/2):0,sgst:intra?tax-Math.floor(tax/2):0,igst:profile.gst_registered&&!intra?tax:0,total:base+tax,staffId,commissionRate,commission:Math.round(base*commissionRate/10000)};
         subtotal+=gross;discount+=disc;taxable+=base;cgst+=line.cgst;sgst+=line.sgst;igst+=line.igst;lines.push(line);
       }
       const total=taxable+cgst+sgst+igst, paid=b.amountPaidPaise||0;
@@ -131,9 +139,31 @@ function createOperationsRouter(pool, tokenService) {
         [shopId,invoiceNumber,fy,docType,date,profile.gstin,profile.legal_name,profile.trade_name,profile.address,profile.state_code,b.customerName.trim(),b.customerEmail||null,b.customerPhone||null,b.customerGstin||null,place,subtotal,discount,taxable,cgst,sgst,igst,total,paid,mode,req.user.id]);
       const invoice=inserted.rows[0];
       for(const line of lines) await client.query(
-        `INSERT INTO sales_invoice_lines (invoice_id,description,hsn_sac_code,quantity,unit_price_paise,discount_paise,tax_rate_bps,taxable_paise,cgst_paise,sgst_paise,igst_paise,total_paise)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
-        [invoice.id,line.description,line.hsn,line.quantity,line.price,line.discount,line.rate,line.base,line.cgst,line.sgst,line.igst,line.total]);
+        `INSERT INTO sales_invoice_lines (invoice_id,description,hsn_sac_code,quantity,unit_price_paise,discount_paise,tax_rate_bps,taxable_paise,cgst_paise,sgst_paise,igst_paise,total_paise,staff_id,commission_rate_bps,commission_paise)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
+        [invoice.id,line.description,line.hsn,line.quantity,line.price,line.discount,line.rate,line.base,line.cgst,line.sgst,line.igst,line.total,line.staffId,line.commissionRate,line.commission]);
+      const allocations=Array.isArray(b.paymentBreakdown)?b.paymentBreakdown:[];
+      if(allocations.length){
+        const methods=['CASH','UPI','CARD','RAZORPAY'];
+        let allocated=0;
+        for(const payment of allocations){
+          if(!methods.includes(payment.method)||!Number.isSafeInteger(payment.amountPaise)||payment.amountPaise<1||
+             (payment.reference!==undefined&&(typeof payment.reference!=='string'||payment.reference.length>120))){
+            await client.query('ROLLBACK');return res.status(400).json({error:'Each payment allocation needs a supported method and positive amount.'});
+          }
+          allocated+=payment.amountPaise;
+        }
+        if(allocated!==paid){await client.query('ROLLBACK');return res.status(400).json({error:'Payment allocations must add up exactly to amountPaidPaise.'});}
+        for(const payment of allocations) await client.query(
+          `INSERT INTO sales_invoice_payments(invoice_id,method,amount_paise,reference,received_by)
+           VALUES($1,$2,$3,$4,$5)`,
+          [invoice.id,payment.method,payment.amountPaise,payment.reference||null,req.user.id]);
+      } else if(paid>0 && mode!=='MIXED') {
+        await client.query(
+          `INSERT INTO sales_invoice_payments(invoice_id,method,amount_paise,received_by)
+           VALUES($1,$2,$3,$4)`,
+          [invoice.id,mode,paid,req.user.id]);
+      }
       await client.query('COMMIT');
       res.status(201).json({invoice});
     } catch(error){await client.query('ROLLBACK');throw error;} finally{client.release();}
