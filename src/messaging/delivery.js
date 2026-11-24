@@ -15,7 +15,7 @@ async function deliver(channel,destination,content,env=process.env,fetchImpl=glo
  }
  if(channel==='WHATSAPP'){
   if(!env.META_WHATSAPP_TOKEN||!meta.phoneNumberId)throw Object.assign(new Error('Meta WhatsApp credentials are not configured'),{code:'PROVIDER_NOT_CONFIGURED'});
-  const response=await fetchImpl('https://graph.facebook.com/v21.0/'+meta.phoneNumberId+'/messages',{method:'POST',headers:{Authorization:'Bearer '+env.META_WHATSAPP_TOKEN,'Content-Type':'application/json'},body:JSON.stringify({messaging_product:'whatsapp',to:destination,type:'text',text:{body:content.body}})});
+  const response=await fetchImpl('https://graph.facebook.com/v21.0/'+meta.phoneNumberId+'/messages',{method:'POST',headers:{Authorization:'Bearer '+env.META_WHATSAPP_TOKEN,'Content-Type':'application/json'},body:JSON.stringify(content.templateName?{messaging_product:'whatsapp',to:destination,type:'template',template:{name:content.templateName,language:{code:'en'},components:[{type:'body',parameters:[{type:'text',text:content.body}]}]}}:{messaging_product:'whatsapp',to:destination,type:'text',text:{body:content.body}})});
   const data=await response.json().catch(()=>({}));if(!response.ok)throw Object.assign(new Error(data.error?.message||'Meta rejected the message'),{code:String(response.status)});return {provider:'META',reference:data.messages?.[0]?.id||null};
  }
  throw Object.assign(new Error('Unsupported message channel'),{code:'UNSUPPORTED_CHANNEL'});
