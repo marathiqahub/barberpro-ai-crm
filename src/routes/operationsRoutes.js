@@ -497,6 +497,19 @@ function createOperationsRouter(pool, tokenService) {
       if(nextStatus==='NO_SHOW')await pool.query(`INSERT INTO appointment_extra_payments(appointment_id,customer_id,payment_type,amount_paise)
         SELECT a.id,a.customer_id,'NO_SHOW_FEE',p.no_show_fee_paise FROM appointments a JOIN shop_appointment_policies p ON p.shop_id=a.shop_id
         WHERE a.id=$1 AND p.no_show_fee_paise>0 ON CONFLICT(appointment_id,payment_type) DO NOTHING`,[appointmentId]);
+      if(nextStatus==='COMPLETED'){
+        const requests=await pool.query(`INSERT INTO shop_review_requests(shop_id,customer_id,appointment_id,channel,scheduled_at)
+          SELECT a.shop_id,a.customer_id,a.id,c.channel,NOW()+INTERVAL '1 hour'
+          FROM appointments a JOIN shop_message_consents c ON c.shop_id=a.shop_id AND c.customer_id=a.customer_id
+          JOIN shop_message_templates t ON t.shop_id=a.shop_id AND t.channel=c.channel AND t.template_key='FEEDBACK_REQUEST' AND t.is_active=TRUE
+          JOIN users u ON u.id=a.customer_id
+          WHERE a.id=$1 AND c.consent=TRUE AND c.revoked_at IS NULL
+            AND ((c.channel='EMAIL' AND c.destination=u.email) OR (c.channel IN('SMS','WHATSAPP') AND c.destination=u.phone))
+            AND (c.channel<>'WHATSAPP' OR (t.provider_template_status='APPROVED' AND t.provider_template_name IS NOT NULL))
+          ON CONFLICT(appointment_id,channel) DO NOTHING RETURNING id,shop_id,customer_id,channel,scheduled_at`,[appointmentId]);
+        for(const request of requests.rows)await pool.query(`INSERT INTO shop_customer_reminders(shop_id,customer_id,appointment_id,channel,template_key,scheduled_at,related_entity_type,related_entity_id)
+          VALUES($1,$2,$3,$4,'FEEDBACK_REQUEST',$5,'REVIEW_REQUEST',$6) ON CONFLICT DO NOTHING`,[request.shop_id,request.customer_id,appointmentId,request.channel,request.scheduled_at,request.id]);
+      }
       const waitlistOffer = nextStatus==='CANCELLED' ? await offerNextWaitlist(pool,updated.rows[0]) : null;
       res.json({appointment:updated.rows[0],waitlistOffer});
     }catch(error){await client.query('ROLLBACK');throw error;}finally{client.release();}
