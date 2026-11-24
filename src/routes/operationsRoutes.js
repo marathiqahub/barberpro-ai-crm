@@ -2,6 +2,7 @@ const express = require('express');
 const argon2 = require('argon2');
 const crypto = require('node:crypto');
 const { createAuthMiddleware } = require('../auth/middleware');
+const { commissionForTaxableAmount, expectedCash, validateTenderAllocations } = require('../financial/calculations');
 
 function createOperationsRouter(pool, tokenService) {
   const router = express.Router();
@@ -125,7 +126,7 @@ function createOperationsRouter(pool, tokenService) {
           if(!staff.rowCount){await client.query('ROLLBACK');return res.status(400).json({error:'Invoice barber must be active at this shop.'});}
           commissionRate=Number(staff.rows[0].commission_rate_bps);
         }
-        const line={description:item.description.trim(),hsn:item.hsnSacCode||null,quantity:qty,price,discount:disc,rate,base,cgst:intra?Math.floor(tax/2):0,sgst:intra?tax-Math.floor(tax/2):0,igst:profile.gst_registered&&!intra?tax:0,total:base+tax,staffId,commissionRate,commission:Math.round(base*commissionRate/10000)};
+        const line={description:item.description.trim(),hsn:item.hsnSacCode||null,quantity:qty,price,discount:disc,rate,base,cgst:intra?Math.floor(tax/2):0,sgst:intra?tax-Math.floor(tax/2):0,igst:profile.gst_registered&&!intra?tax:0,total:base+tax,staffId,commissionRate,commission:commissionForTaxableAmount(base,commissionRate)};
         subtotal+=gross;discount+=disc;taxable+=base;cgst+=line.cgst;sgst+=line.sgst;igst+=line.igst;lines.push(line);
       }
       const total=taxable+cgst+sgst+igst, paid=b.amountPaidPaise||0;
@@ -153,7 +154,7 @@ function createOperationsRouter(pool, tokenService) {
           }
           allocated+=payment.amountPaise;
         }
-        if(allocated!==paid){await client.query('ROLLBACK');return res.status(400).json({error:'Payment allocations must add up exactly to amountPaidPaise.'});}
+        if(!validateTenderAllocations(allocations,paid)){await client.query('ROLLBACK');return res.status(400).json({error:'Payment allocations must add up exactly to amountPaidPaise.'});}
         for(const payment of allocations) await client.query(
           `INSERT INTO sales_invoice_payments(invoice_id,method,amount_paise,reference,received_by)
            VALUES($1,$2,$3,$4,$5)`,
@@ -244,8 +245,9 @@ function createOperationsRouter(pool, tokenService) {
          AND (p.received_at AT TIME ZONE s.timezone)::date=$2::date
          AND i.status='ISSUED'`,[shopId,date]);
     const received=Number(cash.rows[0].cash_received_paise);
-    const expected= b.openingFloatPaise+received-b.cashRefundsPaise-b.cashPaidOutPaise-b.cashDepositedPaise;
-    if(expected<0)return res.status(400).json({error:'Cash outflows exceed opening float plus recorded cash receipts.'});
+    let expected;
+    try{expected=expectedCash({openingFloatPaise:b.openingFloatPaise,cashReceivedPaise:received,cashRefundsPaise:b.cashRefundsPaise,cashPaidOutPaise:b.cashPaidOutPaise,cashDepositedPaise:b.cashDepositedPaise});}
+    catch(error){return res.status(400).json({error:error.message});}
     try{
       const result=await pool.query(
         `INSERT INTO shop_daily_closures
