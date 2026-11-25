@@ -92,6 +92,16 @@ test('preferences API accepts only barber and service IDs owned by the requested
   });
 });
 
+test('preferences API rejects a service ID owned by another shop',async t=>{
+  await withApi(t,{serviceValid:false},async(send,calls)=>{
+    const response=await send(validBody());
+    assert.equal(response.status,400);
+    assert.match((await response.json()).error,/does not belong to this shop/);
+    assert.ok(calls.some(x=>x.sql==='ROLLBACK'));
+    assert.ok(!calls.some(x=>x.sql.startsWith('INSERT INTO shop_customer_profiles')));
+  });
+});
+
 test('preferences API commits profile and consent ledger changes together',async t=>{
   await withApi(t,{},async(send,calls)=>{
     const response=await send(validBody());
