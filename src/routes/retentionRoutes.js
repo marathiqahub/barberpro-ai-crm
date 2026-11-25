@@ -142,7 +142,12 @@ function createRetentionRouter(pool, tokens) {
   r.get('/customer/shops/:shopId/preferences',...customer,wrap(async(q,s)=>{
     const shop=id(q.params.shopId);if(!shop)return s.status(400).json({error:'Invalid shop id.'});
     const [profile,messaging,events,contact,rebooking]=await Promise.all([
-      pool.query(`SELECT p.*,st.display_name preferred_staff_name,sv.name preferred_service_name,
+      pool.query(`SELECT
+        to_jsonb(p) || jsonb_build_object(
+          'skin_notes',CASE WHEN COALESCE((SELECT e.consent FROM shop_customer_consent_events e WHERE e.shop_id=$1 AND e.customer_id=$2 AND e.purpose='PROFILE_NOTES' ORDER BY e.recorded_at DESC,e.id DESC LIMIT 1),FALSE) THEN p.skin_notes ELSE NULL END,
+          'allergy_notes',CASE WHEN COALESCE((SELECT e.consent FROM shop_customer_consent_events e WHERE e.shop_id=$1 AND e.customer_id=$2 AND e.purpose='PROFILE_NOTES' ORDER BY e.recorded_at DESC,e.id DESC LIMIT 1),FALSE) THEN p.allergy_notes ELSE NULL END,
+          'notes',CASE WHEN COALESCE((SELECT e.consent FROM shop_customer_consent_events e WHERE e.shop_id=$1 AND e.customer_id=$2 AND e.purpose='PROFILE_NOTES' ORDER BY e.recorded_at DESC,e.id DESC LIMIT 1),FALSE) THEN p.notes ELSE NULL END
+        ) AS profile,st.display_name preferred_staff_name,sv.name preferred_service_name,
         COALESCE((SELECT e.consent FROM shop_customer_consent_events e WHERE e.shop_id=$1 AND e.customer_id=$2 AND e.purpose='PROFILE_NOTES' ORDER BY e.recorded_at DESC,e.id DESC LIMIT 1),FALSE) profile_notes_consent
         FROM shop_customer_profiles p LEFT JOIN shop_staff st ON st.id=p.preferred_staff_id AND st.shop_id=p.shop_id
         LEFT JOIN services sv ON sv.id=p.preferred_service_id AND sv.shop_id=p.shop_id WHERE p.shop_id=$1 AND p.customer_id=$2`,[shop,q.user.id]),
@@ -151,7 +156,10 @@ function createRetentionRouter(pool, tokens) {
       pool.query('SELECT email,phone FROM users WHERE id=$1',[q.user.id]),
       pool.query('SELECT interval_days,enabled FROM shop_customer_rebooking_profiles WHERE shop_id=$1 AND customer_id=$2',[shop,q.user.id])
     ]);
-    const p=profile.rows[0]||null,byPurpose=Object.fromEntries(events.rows.map(x=>[x.purpose,x.consent]));
+    const rawProfile=profile.rows[0]||null;
+    const p=rawProfile?{...rawProfile.profile,preferred_staff_name:rawProfile.preferred_staff_name,
+      preferred_service_name:rawProfile.preferred_service_name,profile_notes_consent:rawProfile.profile_notes_consent}:null;
+    const byPurpose=Object.fromEntries(events.rows.map(x=>[x.purpose,x.consent]));
     const byChannel=Object.fromEntries(messaging.rows.map(x=>[x.channel,{consent:x.consent&&!x.revoked_at,destination:x.destination}]));
     s.set('Cache-Control','no-store').json({profile:p,contact:contact.rows[0]||{},messaging:byChannel,rebooking:rebooking.rows[0]||{interval_days:21,enabled:false},consents:{
       profileNotes:!!p?.profile_notes_consent,photoStorage:byPurpose.PHOTO_STORAGE??!!p?.photo_consent,
