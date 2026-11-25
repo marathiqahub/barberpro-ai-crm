@@ -194,15 +194,16 @@ function createRetentionRouter(pool, tokens) {
         await db.query('ROLLBACK');
         return s.status(valid.shop_valid?400:404).json({error:!valid.shop_valid?'Active shop not found.':'Selected barber or service does not belong to this shop or is unavailable.'});
       }
-      const x=await db.query(`INSERT INTO shop_customer_profiles(shop_id,customer_id,preferred_staff_id,preferred_service_id,preferred_interval_days,skin_notes,allergy_notes,photo_consent,photo_consent_at,before_photo_url,after_photo_url)
-        SELECT sh.id,$2,$3,$4,COALESCE($5,21),$6,$7,$8,CASE WHEN $8 THEN NOW() ELSE NULL END,CASE WHEN $8 THEN $9 ELSE NULL END,CASE WHEN $8 THEN $10 ELSE NULL END
+      const x=await db.query(`INSERT INTO shop_customer_profiles(shop_id,customer_id,preferred_staff_id,preferred_service_id,preferred_interval_days,skin_notes,allergy_notes,notes,photo_consent,photo_consent_at,before_photo_url,after_photo_url)
+        SELECT sh.id,$2,$3,$4,COALESCE($5,21),$6,$7,NULL,$8,CASE WHEN $8 THEN NOW() ELSE NULL END,CASE WHEN $8 THEN $9 ELSE NULL END,CASE WHEN $8 THEN $10 ELSE NULL END
         FROM shops sh WHERE sh.id=$1 AND sh.is_active=TRUE
         ON CONFLICT(shop_id,customer_id) DO UPDATE SET preferred_staff_id=EXCLUDED.preferred_staff_id,preferred_service_id=EXCLUDED.preferred_service_id,
         preferred_interval_days=CASE WHEN $5::integer IS NULL THEN shop_customer_profiles.preferred_interval_days ELSE EXCLUDED.preferred_interval_days END,skin_notes=EXCLUDED.skin_notes,allergy_notes=EXCLUDED.allergy_notes,
         photo_consent=EXCLUDED.photo_consent,photo_consent_at=CASE WHEN EXCLUDED.photo_consent THEN NOW() ELSE NULL END,
-        before_photo_url=EXCLUDED.before_photo_url,after_photo_url=EXCLUDED.after_photo_url,updated_at=NOW()
+        before_photo_url=EXCLUDED.before_photo_url,after_photo_url=EXCLUDED.after_photo_url,
+        notes=CASE WHEN $11::boolean THEN shop_customer_profiles.notes ELSE NULL END,updated_at=NOW()
         RETURNING shop_id,customer_id,preferred_staff_id,preferred_service_id,preferred_interval_days,skin_notes,allergy_notes,photo_consent,photo_consent_at,before_photo_url,after_photo_url`,
-        [shop,q.user.id,staff,service,b.preferredIntervalDays??null,b.profileNotesConsent?(b.skinNotes??null):null,b.profileNotesConsent?(b.allergyNotes??null):null,b.photoConsent,b.beforePhotoUrl||null,b.afterPhotoUrl||null]);
+        [shop,q.user.id,staff,service,b.preferredIntervalDays??null,b.profileNotesConsent?(b.skinNotes??null):null,b.profileNotesConsent?(b.allergyNotes??null):null,b.photoConsent,b.beforePhotoUrl||null,b.afterPhotoUrl||null,b.profileNotesConsent]);
       if(!x.rowCount){await db.query('ROLLBACK');return s.status(404).json({error:'Active shop not found.'});}
       await db.query(`INSERT INTO shop_customer_consent_events(shop_id,customer_id,purpose,consent,notice_version)
         VALUES($1,$2,'PROFILE_NOTES',$3,$4),($1,$2,'PHOTO_STORAGE',$5,$4),($1,$2,'MARKETING',$6,$4)`,
