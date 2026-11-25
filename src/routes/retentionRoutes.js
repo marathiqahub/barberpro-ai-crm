@@ -176,6 +176,16 @@ function createRetentionRouter(pool, tokens) {
     const db=await pool.connect();
     try{
       await db.query('BEGIN');
+      const ownership=await db.query(`SELECT
+        EXISTS(SELECT 1 FROM shops WHERE id=$1 AND is_active=TRUE) AS shop_valid,
+        ($2::bigint IS NULL OR EXISTS(SELECT 1 FROM shop_staff WHERE id=$2 AND shop_id=$1 AND is_active=TRUE)) AS staff_valid,
+        ($3::bigint IS NULL OR EXISTS(SELECT 1 FROM services WHERE id=$3 AND shop_id=$1 AND is_active=TRUE)) AS service_valid`,
+        [shop,staff,service]);
+      const valid=ownership.rows[0]||{};
+      if(!valid.shop_valid||!valid.staff_valid||!valid.service_valid){
+        await db.query('ROLLBACK');
+        return s.status(valid.shop_valid?400:404).json({error:!valid.shop_valid?'Active shop not found.':'Selected barber or service does not belong to this shop or is unavailable.'});
+      }
       const x=await db.query(`INSERT INTO shop_customer_profiles(shop_id,customer_id,preferred_staff_id,preferred_service_id,preferred_interval_days,skin_notes,allergy_notes,photo_consent,photo_consent_at,before_photo_url,after_photo_url)
         SELECT sh.id,$2,$3,$4,COALESCE($5,21),$6,$7,$8,CASE WHEN $8 THEN NOW() ELSE NULL END,CASE WHEN $8 THEN $9 ELSE NULL END,CASE WHEN $8 THEN $10 ELSE NULL END
         FROM shops sh WHERE sh.id=$1 AND sh.is_active=TRUE
@@ -192,7 +202,11 @@ function createRetentionRouter(pool, tokens) {
       for(const [channel,destination,consent] of [
         ['WHATSAPP',whatsappDestination,b.whatsappConsent],['SMS',smsDestination,b.smsConsent]
       ]){
-        if(!destination)continue;
+        if(!destination){
+          if(!consent)await db.query(`UPDATE shop_message_consents SET consent=FALSE,revoked_at=NOW()
+            WHERE shop_id=$1 AND customer_id=$2 AND channel=$3 AND consent=TRUE`,[shop,q.user.id,channel]);
+          continue;
+        }
         await db.query(`INSERT INTO shop_message_consents(shop_id,customer_id,channel,destination,consent,consent_source,consented_at,revoked_at)
           SELECT $1,$2,$3,$4,$5,'CUSTOMER_SETTINGS',NOW(),CASE WHEN $5 THEN NULL ELSE NOW() END
           WHERE EXISTS(SELECT 1 FROM shops WHERE id=$1 AND is_active=TRUE)
