@@ -34,3 +34,8 @@ test('appointment reminder scheduler creates 24-hour, 2-hour and legacy email/SM
  assert.match(statements[0].sql,/ON CONFLICT\(dedupe_key\)/);
  assert.deepEqual(statements[0].params.slice(0,3),[1,2,3]);
 });
+
+test('India local ten-digit SMS numbers are also blocked until DLT is configured',async()=>{
+ const env={TWILIO_ACCOUNT_SID:'AC123',TWILIO_AUTH_TOKEN:'secret',TWILIO_SMS_FROM:'BARBER'};
+ await assert.rejects(()=>deliver('SMS','9876543210',{body:'Reminder'},env,async()=>{throw new Error('must not call provider')}),{code:'DLT_TEMPLATE_REQUIRED'});
+});

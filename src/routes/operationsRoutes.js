@@ -471,7 +471,7 @@ function createOperationsRouter(pool, tokenService) {
       if(!working.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'Barber is outside their working hours.'});}
       const off=await client.query(
         'SELECT 1 FROM staff_time_off WHERE staff_id=$1 AND tstzrange(starts_at,ends_at,\'[)\') && tstzrange($2::timestamptz,$3::timestamptz,\'[)\')',
-        [staffId,startsAt.toISOString(),endsAt.toISOString()]);
+        [staffId,startsAt.toISOString(),bufferEndsAt.toISOString()]);
       if(off.rowCount){await client.query('ROLLBACK');return res.status(409).json({error:'Barber is unavailable during this time.'});}
       const inserted=await client.query(
         `INSERT INTO appointments(shop_id,staff_id,service_id,customer_id,starts_at,ends_at,status,customer_notes)

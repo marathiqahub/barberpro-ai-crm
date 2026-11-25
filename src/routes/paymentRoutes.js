@@ -138,8 +138,8 @@ function createPaymentRouter(pool, tokenService) {
         if (event.event === 'payment_link.paid' && paymentLink?.id) {
           await client.query(`UPDATE shop_barber_tips SET status='PAID',razorpay_payment_id=COALESCE($2,razorpay_payment_id),
             paid_at=COALESCE(to_timestamp(NULLIF($3,0)),NOW()),updated_at=NOW()
-            WHERE razorpay_payment_link_id=$1 AND status='CREATED'`,
-            [paymentLink.id,entity?.id||null,Number(paymentLink.paid_at||0)]);
+            WHERE razorpay_payment_link_id=$1 AND amount_paise=$4 AND status='CREATED'`,
+            [paymentLink.id,entity?.id||null,Number(paymentLink.paid_at||0),Number(paymentLink.amount_paid||0)]);
         } else if (event.event === 'payment_link.expired' && paymentLink?.id) {
           await client.query(`UPDATE shop_barber_tips SET status='EXPIRED',updated_at=NOW()
             WHERE razorpay_payment_link_id=$1 AND status='CREATED'`,[paymentLink.id]);

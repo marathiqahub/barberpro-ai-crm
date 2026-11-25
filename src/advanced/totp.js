@@ -20,13 +20,15 @@ function totpCode(secret,at=Date.now(),step=30){
   const binary=((digest[offset]&127)<<24)|(digest[offset+1]<<16)|(digest[offset+2]<<8)|digest[offset+3];
   return String(binary%1000000).padStart(6,'0');
 }
-function verifyTotp(secret,code,at=Date.now(),window=1){
-  if(!/^\d{6}$/.test(String(code||'')))return false;
-  for(let drift=-window;drift<=window;drift++)if(totpCode(secret,at+drift*30000)===String(code))return true;
-  return false;
+function matchingTotpStep(secret,code,at=Date.now(),window=1){
+  if(!/^\d{6}$/.test(String(code||'')))return null;
+  const current=Math.floor(at/30000);
+  for(let drift=-window;drift<=window;drift++){const step=current+drift;if(totpCode(secret,step*30000)===String(code))return step;}
+  return null;
 }
+function verifyTotp(secret,code,at=Date.now(),window=1){return matchingTotpStep(secret,code,at,window)!==null;}
 function encryptionKey(env=process.env){
-  if(!env.TOTP_ENCRYPTION_KEY||Buffer.byteLength(env.TOTP_ENCRYPTION_KEY)<32)throw Object.assign(new Error('TOTP_ENCRYPTION_KEY must contain at least 32 bytes.'),{code:'TOTP_KEY_NOT_CONFIGURED'});
+  if(!env.TOTP_ENCRYPTION_KEY||Buffer.byteLength(env.TOTP_ENCRYPTION_KEY)<32)throw Object.assign(new Error('TOTP_ENCRYPTION_KEY must contain at least 32 bytes.'),{code:'TOTP_KEY_NOT_CONFIGURED',status:503});
   return crypto.createHash('sha256').update(env.TOTP_ENCRYPTION_KEY).digest();
 }
 function encryptSecret(secret,env=process.env){
@@ -43,4 +45,4 @@ function decryptSecret(value,env=process.env){
 function otpauthUri(secret,account,issuer='BarberPro'){
   return 'otpauth://totp/'+encodeURIComponent(issuer+':'+account)+'?secret='+secret+'&issuer='+encodeURIComponent(issuer)+'&algorithm=SHA1&digits=6&period=30';
 }
-module.exports={base32Encode,base32Decode,generateSecret,totpCode,verifyTotp,encryptSecret,decryptSecret,otpauthUri};
+module.exports={base32Encode,base32Decode,generateSecret,totpCode,matchingTotpStep,verifyTotp,encryptSecret,decryptSecret,otpauthUri};
