@@ -9,7 +9,7 @@ function createRetentionRouter(pool, tokens) {
   const customer = [authenticate, requireRole('CUSTOMER')];
   const admin = [authenticate, requireRole('ADMIN')];
   const wrap = fn => (req,res,next) => Promise.resolve(fn(req,res,next)).catch(next);
-  const id = v => /^[1-9]\\d*$/.test(String(v)) && Number.isSafeInteger(Number(v)) ? Number(v) : null;
+  const id = v => /^[1-9][0-9]*$/.test(String(v)) && Number.isSafeInteger(Number(v)) ? Number(v) : null;
   const validHttps = v => v == null || v === '' || (typeof v === 'string' && v.length <= 2048 && /^https:\/\//i.test(v));
   const audit = (db,shopId,actor,action,type,entityId,metadata={}) => db.query(
     'INSERT INTO shop_audit_events(shop_id,actor_user_id,action,entity_type,entity_id,metadata) VALUES($1,$2,$3,$4,$5,$6::jsonb)',
