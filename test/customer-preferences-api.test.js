@@ -26,7 +26,7 @@ function createHarness(options={}){
           const normalized=String(sql).replace(/\\s+/g,' ').trim();
           calls.push({sql:normalized,params});
           if(normalized==='BEGIN'||normalized==='COMMIT'||normalized==='ROLLBACK')return {rowCount:0,rows:[]};
-          if(normalized.startsWith('SELECT EXISTS(')){
+          if(normalized.startsWith('SELECT')&&normalized.includes('EXISTS(SELECT 1 FROM shops')){
             return {rowCount:1,rows:[{
               shop_valid:options.shopValid!==false,
               staff_valid:options.staffValid!==false,
