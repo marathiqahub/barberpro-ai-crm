@@ -29,6 +29,7 @@ test('PostgreSQL customer preference integration', {skip:!process.env.TEST_DATAB
    CREATE TABLE appointments(id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,shop_id BIGINT,customer_id BIGINT,starts_at TIMESTAMPTZ,status TEXT,service_id BIGINT);
    CREATE TABLE shop_customer_reminders(id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,shop_id BIGINT,customer_id BIGINT,appointment_id BIGINT,channel TEXT,template_key TEXT,scheduled_at TIMESTAMPTZ,dedupe_key TEXT UNIQUE);
    CREATE TABLE shop_demo_customer_profiles(id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,shop_id BIGINT,demo_key TEXT,display_name TEXT,preferred_barber_label TEXT,preferred_service_label TEXT,care_notes TEXT,photo_storage_consent BOOLEAN DEFAULT FALSE,marketing_consent BOOLEAN DEFAULT FALSE,whatsapp_reminders_consent BOOLEAN DEFAULT FALSE,sms_reminders_consent BOOLEAN DEFAULT FALSE,UNIQUE(shop_id,demo_key));
+   CREATE TABLE shop_waitlist_entries(id BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,shop_id BIGINT,customer_id BIGINT,service_id BIGINT,preferred_staff_id BIGINT,requested_date DATE,preferred_time_start TIME,preferred_time_end TIME,status TEXT DEFAULT 'WAITING',created_at TIMESTAMPTZ DEFAULT NOW());
   `);
   const shop=(await db.query("INSERT INTO shops(name) VALUES('Test shop') RETURNING id")).rows[0].id;
   const other=(await db.query("INSERT INTO shops(name) VALUES('Other shop') RETURNING id")).rows[0].id;
@@ -64,6 +65,16 @@ test('PostgreSQL customer preference integration', {skip:!process.env.TEST_DATAB
   await t.test('cross-shop barber and service IDs are rejected',async()=>{
    const res=await call('/customer/shops/'+shop+'/preferences','customer','PUT',{...consentOff,preferredStaffId:foreignStaff,preferredServiceId:foreignService});
    assert.equal(res.status,400);
+  });
+  await t.test('waitlist rejects invalid dates and times and cross-shop barbers',async()=>{
+   const invalidDate=await call('/shops/'+shop+'/waitlist','customer','POST',{serviceId:service,requestedDate:'2026-02-31'});
+   assert.equal(invalidDate.status,400);
+   const invalidTime=await call('/shops/'+shop+'/waitlist','customer','POST',{serviceId:service,requestedDate:new Date(Date.now()+86400000).toISOString().slice(0,10),preferredTimeStart:'25:90'});
+   assert.equal(invalidTime.status,400);
+   const foreign=await call('/shops/'+shop+'/waitlist','customer','POST',{serviceId:service,preferredStaffId:foreignStaff,requestedDate:new Date(Date.now()+86400000).toISOString().slice(0,10)});
+   assert.equal(foreign.status,404);
+   const local=await call('/shops/'+shop+'/waitlist','customer','POST',{serviceId:service,preferredStaffId:staff,requestedDate:new Date(Date.now()+86400000).toISOString().slice(0,10)});
+   assert.equal(local.status,201);
   });
   await t.test('rebooking queue remains empty until customer explicitly opts in',async()=>{
    await db.query("INSERT INTO appointments(shop_id,customer_id,starts_at,status,service_id) VALUES($1,$2,NOW()-INTERVAL '45 days','COMPLETED',$3)",[shop,customer,service]);
