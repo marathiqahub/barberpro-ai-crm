@@ -9,7 +9,7 @@ function createRetentionRouter(pool, tokens) {
   const customer = [authenticate, requireRole('CUSTOMER')];
   const admin = [authenticate, requireRole('ADMIN')];
   const wrap = fn => (req,res,next) => Promise.resolve(fn(req,res,next)).catch(next);
-  const id = v => /^[1-9]\\d*$/.test(String(v)) && Number.isSafeInteger(Number(v)) ? Number(v) : null;
+  const id = v => /^[1-9][0-9]*$/.test(String(v)) && Number.isSafeInteger(Number(v)) ? Number(v) : null;
   const validHttps = v => v == null || v === '' || (typeof v === 'string' && v.length <= 2048 && /^https:\/\//i.test(v));
   const audit = (db,shopId,actor,action,type,entityId,metadata={}) => db.query(
     'INSERT INTO shop_audit_events(shop_id,actor_user_id,action,entity_type,entity_id,metadata) VALUES($1,$2,$3,$4,$5,$6::jsonb)',
@@ -142,7 +142,12 @@ function createRetentionRouter(pool, tokens) {
   r.get('/customer/shops/:shopId/preferences',...customer,wrap(async(q,s)=>{
     const shop=id(q.params.shopId);if(!shop)return s.status(400).json({error:'Invalid shop id.'});
     const [profile,messaging,events,contact,rebooking]=await Promise.all([
-      pool.query(`SELECT p.*,st.display_name preferred_staff_name,sv.name preferred_service_name,
+      pool.query(`SELECT
+        to_jsonb(p) || jsonb_build_object(
+          'skin_notes',CASE WHEN COALESCE((SELECT e.consent FROM shop_customer_consent_events e WHERE e.shop_id=$1 AND e.customer_id=$2 AND e.purpose='PROFILE_NOTES' ORDER BY e.recorded_at DESC,e.id DESC LIMIT 1),FALSE) THEN p.skin_notes ELSE NULL END,
+          'allergy_notes',CASE WHEN COALESCE((SELECT e.consent FROM shop_customer_consent_events e WHERE e.shop_id=$1 AND e.customer_id=$2 AND e.purpose='PROFILE_NOTES' ORDER BY e.recorded_at DESC,e.id DESC LIMIT 1),FALSE) THEN p.allergy_notes ELSE NULL END,
+          'notes',CASE WHEN COALESCE((SELECT e.consent FROM shop_customer_consent_events e WHERE e.shop_id=$1 AND e.customer_id=$2 AND e.purpose='PROFILE_NOTES' ORDER BY e.recorded_at DESC,e.id DESC LIMIT 1),FALSE) THEN p.notes ELSE NULL END
+        ) AS profile,st.display_name preferred_staff_name,sv.name preferred_service_name,
         COALESCE((SELECT e.consent FROM shop_customer_consent_events e WHERE e.shop_id=$1 AND e.customer_id=$2 AND e.purpose='PROFILE_NOTES' ORDER BY e.recorded_at DESC,e.id DESC LIMIT 1),FALSE) profile_notes_consent
         FROM shop_customer_profiles p LEFT JOIN shop_staff st ON st.id=p.preferred_staff_id AND st.shop_id=p.shop_id
         LEFT JOIN services sv ON sv.id=p.preferred_service_id AND sv.shop_id=p.shop_id WHERE p.shop_id=$1 AND p.customer_id=$2`,[shop,q.user.id]),
@@ -151,7 +156,10 @@ function createRetentionRouter(pool, tokens) {
       pool.query('SELECT email,phone FROM users WHERE id=$1',[q.user.id]),
       pool.query('SELECT interval_days,enabled FROM shop_customer_rebooking_profiles WHERE shop_id=$1 AND customer_id=$2',[shop,q.user.id])
     ]);
-    const p=profile.rows[0]||null,byPurpose=Object.fromEntries(events.rows.map(x=>[x.purpose,x.consent]));
+    const rawProfile=profile.rows[0]||null;
+    const p=rawProfile?{...rawProfile.profile,preferred_staff_name:rawProfile.preferred_staff_name,
+      preferred_service_name:rawProfile.preferred_service_name,profile_notes_consent:rawProfile.profile_notes_consent}:null;
+    const byPurpose=Object.fromEntries(events.rows.map(x=>[x.purpose,x.consent]));
     const byChannel=Object.fromEntries(messaging.rows.map(x=>[x.channel,{consent:x.consent&&!x.revoked_at,destination:x.destination}]));
     s.set('Cache-Control','no-store').json({profile:p,contact:contact.rows[0]||{},messaging:byChannel,rebooking:rebooking.rows[0]||{interval_days:21,enabled:false},consents:{
       profileNotes:!!p?.profile_notes_consent,photoStorage:byPurpose.PHOTO_STORAGE??!!p?.photo_consent,
@@ -176,15 +184,26 @@ function createRetentionRouter(pool, tokens) {
     const db=await pool.connect();
     try{
       await db.query('BEGIN');
-      const x=await db.query(`INSERT INTO shop_customer_profiles(shop_id,customer_id,preferred_staff_id,preferred_service_id,preferred_interval_days,skin_notes,allergy_notes,photo_consent,photo_consent_at,before_photo_url,after_photo_url)
-        SELECT sh.id,$2,$3,$4,COALESCE($5,21),$6,$7,$8,CASE WHEN $8 THEN NOW() ELSE NULL END,CASE WHEN $8 THEN $9 ELSE NULL END,CASE WHEN $8 THEN $10 ELSE NULL END
+      const ownership=await db.query(`SELECT
+        EXISTS(SELECT 1 FROM shops WHERE id=$1 AND is_active=TRUE) AS shop_valid,
+        ($2::bigint IS NULL OR EXISTS(SELECT 1 FROM shop_staff WHERE id=$2 AND shop_id=$1 AND is_active=TRUE)) AS staff_valid,
+        ($3::bigint IS NULL OR EXISTS(SELECT 1 FROM services WHERE id=$3 AND shop_id=$1 AND is_active=TRUE)) AS service_valid`,
+        [shop,staff,service]);
+      const valid=ownership.rows[0]||{};
+      if(!valid.shop_valid||!valid.staff_valid||!valid.service_valid){
+        await db.query('ROLLBACK');
+        return s.status(valid.shop_valid?400:404).json({error:!valid.shop_valid?'Active shop not found.':'Selected barber or service does not belong to this shop or is unavailable.'});
+      }
+      const x=await db.query(`INSERT INTO shop_customer_profiles(shop_id,customer_id,preferred_staff_id,preferred_service_id,preferred_interval_days,skin_notes,allergy_notes,notes,photo_consent,photo_consent_at,before_photo_url,after_photo_url)
+        SELECT sh.id,$2,$3,$4,COALESCE($5,21),$6,$7,NULL,$8,CASE WHEN $8 THEN NOW() ELSE NULL END,CASE WHEN $8 THEN $9 ELSE NULL END,CASE WHEN $8 THEN $10 ELSE NULL END
         FROM shops sh WHERE sh.id=$1 AND sh.is_active=TRUE
         ON CONFLICT(shop_id,customer_id) DO UPDATE SET preferred_staff_id=EXCLUDED.preferred_staff_id,preferred_service_id=EXCLUDED.preferred_service_id,
         preferred_interval_days=CASE WHEN $5::integer IS NULL THEN shop_customer_profiles.preferred_interval_days ELSE EXCLUDED.preferred_interval_days END,skin_notes=EXCLUDED.skin_notes,allergy_notes=EXCLUDED.allergy_notes,
         photo_consent=EXCLUDED.photo_consent,photo_consent_at=CASE WHEN EXCLUDED.photo_consent THEN NOW() ELSE NULL END,
-        before_photo_url=EXCLUDED.before_photo_url,after_photo_url=EXCLUDED.after_photo_url,updated_at=NOW()
+        before_photo_url=EXCLUDED.before_photo_url,after_photo_url=EXCLUDED.after_photo_url,
+        notes=CASE WHEN $11::boolean THEN shop_customer_profiles.notes ELSE NULL END,updated_at=NOW()
         RETURNING shop_id,customer_id,preferred_staff_id,preferred_service_id,preferred_interval_days,skin_notes,allergy_notes,photo_consent,photo_consent_at,before_photo_url,after_photo_url`,
-        [shop,q.user.id,staff,service,b.preferredIntervalDays??null,b.profileNotesConsent?(b.skinNotes??null):null,b.profileNotesConsent?(b.allergyNotes??null):null,b.photoConsent,b.beforePhotoUrl||null,b.afterPhotoUrl||null]);
+        [shop,q.user.id,staff,service,b.preferredIntervalDays??null,b.profileNotesConsent?(b.skinNotes??null):null,b.profileNotesConsent?(b.allergyNotes??null):null,b.photoConsent,b.beforePhotoUrl||null,b.afterPhotoUrl||null,b.profileNotesConsent]);
       if(!x.rowCount){await db.query('ROLLBACK');return s.status(404).json({error:'Active shop not found.'});}
       await db.query(`INSERT INTO shop_customer_consent_events(shop_id,customer_id,purpose,consent,notice_version)
         VALUES($1,$2,'PROFILE_NOTES',$3,$4),($1,$2,'PHOTO_STORAGE',$5,$4),($1,$2,'MARKETING',$6,$4)`,
@@ -192,7 +211,11 @@ function createRetentionRouter(pool, tokens) {
       for(const [channel,destination,consent] of [
         ['WHATSAPP',whatsappDestination,b.whatsappConsent],['SMS',smsDestination,b.smsConsent]
       ]){
-        if(!destination)continue;
+        if(!destination){
+          if(!consent)await db.query(`UPDATE shop_message_consents SET consent=FALSE,revoked_at=NOW()
+            WHERE shop_id=$1 AND customer_id=$2 AND channel=$3 AND consent=TRUE`,[shop,q.user.id,channel]);
+          continue;
+        }
         await db.query(`INSERT INTO shop_message_consents(shop_id,customer_id,channel,destination,consent,consent_source,consented_at,revoked_at)
           SELECT $1,$2,$3,$4,$5,'CUSTOMER_SETTINGS',NOW(),CASE WHEN $5 THEN NULL ELSE NOW() END
           WHERE EXISTS(SELECT 1 FROM shops WHERE id=$1 AND is_active=TRUE)
