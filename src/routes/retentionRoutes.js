@@ -160,26 +160,52 @@ function createRetentionRouter(pool, tokens) {
   }));
   r.put('/customer/shops/:shopId/preferences',...customer,wrap(async(q,s)=>{
     const shop=id(q.params.shopId),b=q.body||{},staff=b.preferredStaffId==null?null:id(b.preferredStaffId),service=b.preferredServiceId==null?null:id(b.preferredServiceId);
+    const whatsappDestination=b.whatsappDestination==null?null:String(b.whatsappDestination).trim();
+    const smsDestination=b.smsDestination==null?null:String(b.smsDestination).trim();
     if(!shop||(b.preferredStaffId!=null&&!staff)||(b.preferredServiceId!=null&&!service)||
       (b.preferredIntervalDays!=null&&(!Number.isInteger(b.preferredIntervalDays)||b.preferredIntervalDays<7||b.preferredIntervalDays>180))||
       (b.skinNotes!=null&&(typeof b.skinNotes!=='string'||b.skinNotes.length>1000))||
       (b.allergyNotes!=null&&(typeof b.allergyNotes!=='string'||b.allergyNotes.length>1000))||
-      typeof b.photoConsent!=='boolean'||typeof b.profileNotesConsent!=='boolean'||(!b.profileNotesConsent&&Boolean(b.skinNotes||b.allergyNotes))||!validHttps(b.beforePhotoUrl)||!validHttps(b.afterPhotoUrl))
-      return s.status(400).json({error:'Invalid customer preferences or photo consent details.'});
-    const x=await pool.query(`INSERT INTO shop_customer_profiles(shop_id,customer_id,preferred_staff_id,preferred_service_id,preferred_interval_days,skin_notes,allergy_notes,photo_consent,photo_consent_at,before_photo_url,after_photo_url)
-      SELECT sh.id,$2,$3,$4,COALESCE($5,21),$6,$7,$8,CASE WHEN $8 THEN NOW() ELSE NULL END,CASE WHEN $8 THEN $9 ELSE NULL END,CASE WHEN $8 THEN $10 ELSE NULL END
-      FROM shops sh WHERE sh.id=$1 AND sh.is_active=TRUE
-      ON CONFLICT(shop_id,customer_id) DO UPDATE SET preferred_staff_id=EXCLUDED.preferred_staff_id,preferred_service_id=EXCLUDED.preferred_service_id,
-      preferred_interval_days=CASE WHEN $5::integer IS NULL THEN shop_customer_profiles.preferred_interval_days ELSE EXCLUDED.preferred_interval_days END,skin_notes=EXCLUDED.skin_notes,allergy_notes=EXCLUDED.allergy_notes,
-      photo_consent=EXCLUDED.photo_consent,photo_consent_at=CASE WHEN EXCLUDED.photo_consent THEN NOW() ELSE NULL END,
-      before_photo_url=EXCLUDED.before_photo_url,after_photo_url=EXCLUDED.after_photo_url,updated_at=NOW()
-      RETURNING shop_id,customer_id,preferred_staff_id,preferred_service_id,preferred_interval_days,skin_notes,allergy_notes,photo_consent,photo_consent_at,before_photo_url,after_photo_url`,
-      [shop,q.user.id,staff,service,b.preferredIntervalDays??null,b.profileNotesConsent?(b.skinNotes??null):null,b.profileNotesConsent?(b.allergyNotes??null):null,b.photoConsent,b.beforePhotoUrl||null,b.afterPhotoUrl||null]);
-    if(!x.rowCount)return s.status(404).json({error:'Active shop not found.'});
-    await pool.query(`INSERT INTO shop_customer_consent_events(shop_id,customer_id,purpose,consent,notice_version)
-      VALUES($1,$2,'PROFILE_NOTES',$3,$4),($1,$2,'PHOTO_STORAGE',$5,$4)`,
-      [shop,q.user.id,b.profileNotesConsent,b.noticeVersion||'v1',b.photoConsent]);
-    s.json({profile:x.rows[0]});
+      typeof b.photoConsent!=='boolean'||typeof b.profileNotesConsent!=='boolean'||
+      typeof b.marketingConsent!=='boolean'||typeof b.whatsappConsent!=='boolean'||typeof b.smsConsent!=='boolean'||
+      (!b.profileNotesConsent&&Boolean(b.skinNotes||b.allergyNotes))||!validHttps(b.beforePhotoUrl)||!validHttps(b.afterPhotoUrl)||
+      (whatsappDestination!==null&&(!whatsappDestination||whatsappDestination.length>254))||
+      (smsDestination!==null&&(!smsDestination||smsDestination.length>254))||
+      (b.whatsappConsent&&!whatsappDestination)||(b.smsConsent&&!smsDestination))
+      return s.status(400).json({error:'Invalid customer preferences, consent choices or messaging destinations.'});
+    const db=await pool.connect();
+    try{
+      await db.query('BEGIN');
+      const x=await db.query(`INSERT INTO shop_customer_profiles(shop_id,customer_id,preferred_staff_id,preferred_service_id,preferred_interval_days,skin_notes,allergy_notes,photo_consent,photo_consent_at,before_photo_url,after_photo_url)
+        SELECT sh.id,$2,$3,$4,COALESCE($5,21),$6,$7,$8,CASE WHEN $8 THEN NOW() ELSE NULL END,CASE WHEN $8 THEN $9 ELSE NULL END,CASE WHEN $8 THEN $10 ELSE NULL END
+        FROM shops sh WHERE sh.id=$1 AND sh.is_active=TRUE
+        ON CONFLICT(shop_id,customer_id) DO UPDATE SET preferred_staff_id=EXCLUDED.preferred_staff_id,preferred_service_id=EXCLUDED.preferred_service_id,
+        preferred_interval_days=CASE WHEN $5::integer IS NULL THEN shop_customer_profiles.preferred_interval_days ELSE EXCLUDED.preferred_interval_days END,skin_notes=EXCLUDED.skin_notes,allergy_notes=EXCLUDED.allergy_notes,
+        photo_consent=EXCLUDED.photo_consent,photo_consent_at=CASE WHEN EXCLUDED.photo_consent THEN NOW() ELSE NULL END,
+        before_photo_url=EXCLUDED.before_photo_url,after_photo_url=EXCLUDED.after_photo_url,updated_at=NOW()
+        RETURNING shop_id,customer_id,preferred_staff_id,preferred_service_id,preferred_interval_days,skin_notes,allergy_notes,photo_consent,photo_consent_at,before_photo_url,after_photo_url`,
+        [shop,q.user.id,staff,service,b.preferredIntervalDays??null,b.profileNotesConsent?(b.skinNotes??null):null,b.profileNotesConsent?(b.allergyNotes??null):null,b.photoConsent,b.beforePhotoUrl||null,b.afterPhotoUrl||null]);
+      if(!x.rowCount){await db.query('ROLLBACK');return s.status(404).json({error:'Active shop not found.'});}
+      await db.query(`INSERT INTO shop_customer_consent_events(shop_id,customer_id,purpose,consent,notice_version)
+        VALUES($1,$2,'PROFILE_NOTES',$3,$4),($1,$2,'PHOTO_STORAGE',$5,$4),($1,$2,'MARKETING',$6,$4)`,
+        [shop,q.user.id,b.profileNotesConsent,b.noticeVersion||'v1',b.photoConsent,b.marketingConsent]);
+      for(const [channel,destination,consent] of [
+        ['WHATSAPP',whatsappDestination,b.whatsappConsent],['SMS',smsDestination,b.smsConsent]
+      ]){
+        if(!destination)continue;
+        await db.query(`INSERT INTO shop_message_consents(shop_id,customer_id,channel,destination,consent,consent_source,consented_at,revoked_at)
+          SELECT $1,$2,$3,$4,$5,'CUSTOMER_SETTINGS',NOW(),CASE WHEN $5 THEN NULL ELSE NOW() END
+          WHERE EXISTS(SELECT 1 FROM shops WHERE id=$1 AND is_active=TRUE)
+          ON CONFLICT(shop_id,customer_id,channel,destination) DO UPDATE SET consent=EXCLUDED.consent,consented_at=NOW(),
+          revoked_at=CASE WHEN EXCLUDED.consent THEN NULL ELSE NOW() END`,
+          [shop,q.user.id,channel,destination,consent]);
+      }
+      await db.query('COMMIT');
+      s.json({profile:x.rows[0],consents:{profileNotes:b.profileNotesConsent,photoStorage:b.photoConsent,marketing:b.marketingConsent,whatsapp:b.whatsappConsent,sms:b.smsConsent}});
+    }catch(error){
+      await db.query('ROLLBACK').catch(()=>{});
+      throw error;
+    }finally{db.release();}
   }));
 
   r.get('/customer/data-export',...customer,wrap(async(q,s)=>{
