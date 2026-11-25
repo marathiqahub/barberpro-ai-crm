@@ -37,3 +37,20 @@ test('customer preferences endpoint returns persisted values and neutral consent
  assert.match(ui,/consents\.profileNotes\?\(profile\.skin_notes/);
  assert.match(ui,/name="enabled"/);
 });
+
+test('customer preference and all consent writes are committed in one transaction',()=>{
+ assert.match(routes,/const db=await pool\.connect\(\)/);
+ assert.match(routes,/await db\.query\('BEGIN'\)/);
+ assert.match(routes,/await db\.query\('COMMIT'\)/);
+ assert.match(routes,/await db\.query\('ROLLBACK'\)/);
+ assert.match(routes,/purpose,consent,notice_version/);
+ assert.match(routes,/MARKETING/);
+ assert.match(routes,/shop_message_consents/);
+ assert.match(routes,/WHATSAPP/);
+ assert.match(routes,/SMS/);
+ assert.doesNotMatch(ui,/api\('\/customer\/shops\/\'\+shop\.value\+'\/consent-events'/);
+ assert.doesNotMatch(ui,/api\('\/customer\/shops\/\'\+shop\.value\+'\/message-consent'/);
+ assert.match(ui,/marketingConsent:f\.has\('marketing'\)/);
+ assert.match(ui,/whatsappConsent:f\.has\('whatsapp'\)/);
+ assert.match(ui,/smsConsent:f\.has\('sms'\)/);
+});
