@@ -17,8 +17,10 @@ test('demo customer profiles are isolated from real customer accounts and consen
  assert.match(migration,/sms_reminders_consent BOOLEAN NOT NULL DEFAULT FALSE/);
  assert.match(migration,/ALTER COLUMN enabled SET DEFAULT FALSE/);
  const worker=fs.readFileSync(path.join(root,'scripts/deliver-reminders.js'),'utf8');
- assert.match(worker,/JOIN shop_customer_rebooking_profiles rp/);
- assert.match(worker,/rp\.enabled=TRUE/);
+ const rebooking=fs.readFileSync(path.join(root,'src/messaging/rebooking.js'),'utf8');
+ assert.match(worker,/queueRebookingNudges\\(pool\\)/);
+ assert.match(rebooking,/JOIN shop_customer_rebooking_profiles rp/);
+ assert.match(rebooking,/rp\\.enabled=TRUE/);
  assert.doesNotMatch(migration,/INSERT INTO (users|shop_customer_profiles|shop_message_consents|shop_customer_consent_events)/i);
  assert.match(routes,/\/admin\/shops\/:shopId\/demo-customer-profiles/);
  assert.match(routes,/const activeShop=await pool\.query/);
