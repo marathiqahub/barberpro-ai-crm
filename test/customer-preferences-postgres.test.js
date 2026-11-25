@@ -49,7 +49,7 @@ test('PostgreSQL customer preference integration', {skip:!process.env.TEST_DATAB
   await t.test('existing preferences load and absent consent defaults off',async()=>{
    await db.query("INSERT INTO shop_customer_profiles(shop_id,customer_id,preferred_staff_id,preferred_service_id,skin_notes,allergy_notes,notes) VALUES($1,$2,$3,$4,'skin','allergy','private')",[shop,customer,staff,service]);
    const res=await call('/customer/shops/'+shop+'/preferences');const data=await res.json();
-   assert.equal(data.profile.preferred_staff_id,staff);assert.equal(data.consents.profileNotes,false);
+   assert.equal(Number(data.profile.preferred_staff_id),Number(staff));assert.equal(data.consents.profileNotes,false);
    assert.equal(data.consents.marketing,false);assert.equal(data.consents.whatsapp,false);assert.equal(data.consents.sms,false);
    assert.equal(data.profile.skin_notes,null);assert.equal(data.profile.allergy_notes,null);assert.equal(data.profile.notes,null);
   });
