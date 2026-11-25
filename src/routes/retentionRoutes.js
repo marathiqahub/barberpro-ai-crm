@@ -11,6 +11,12 @@ function createRetentionRouter(pool, tokens) {
   const wrap = fn => (req,res,next) => Promise.resolve(fn(req,res,next)).catch(next);
   const id = v => /^[1-9][0-9]*$/.test(String(v)) && Number.isSafeInteger(Number(v)) ? Number(v) : null;
   const validHttps = v => v == null || v === '' || (typeof v === 'string' && v.length <= 2048 && /^https:\/\//i.test(v));
+  const validDate = v => {
+    if(typeof v!=='string'||! /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(v))return false;
+    const [year,month,day]=v.split('-').map(Number);
+    const parsed=new Date(Date.UTC(year,month-1,day));
+    return parsed.getUTCFullYear()===year&&parsed.getUTCMonth()===month-1&&parsed.getUTCDate()===day;
+  };
   const audit = (db,shopId,actor,action,type,entityId,metadata={}) => db.query(
     'INSERT INTO shop_audit_events(shop_id,actor_user_id,action,entity_type,entity_id,metadata) VALUES($1,$2,$3,$4,$5,$6::jsonb)',
     [shopId,actor,action,type,String(entityId),JSON.stringify(metadata)]);
@@ -50,12 +56,14 @@ function createRetentionRouter(pool, tokens) {
   r.post('/shops/:shopId/waitlist',...customer,wrap(async(q,s)=>{
     const shop=id(q.params.shopId),service=id(q.body?.serviceId),staff=q.body?.preferredStaffId==null?null:id(q.body.preferredStaffId),day=q.body?.requestedDate;
     const start=q.body?.preferredTimeStart||null,end=q.body?.preferredTimeEnd||null;
-    if(!shop||!service||!/^\\d{4}-\\d{2}-\\d{2}$/.test(day||'')||(q.body?.preferredStaffId!=null&&!staff)||
-      (start!==null&&!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(start))||(end!==null&&!/^([01]\\d|2[0-3]):[0-5]\\d$/.test(end))||
+    if(!shop||!service||!validDate(day)||(q.body?.preferredStaffId!=null&&!staff)||
+      (start!==null&&!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(start))||(end!==null&&!/^([01][0-9]|2[0-3]):[0-5][0-9]$/.test(end))||
       (start&&end&&start>=end))return s.status(400).json({error:'Provide a service, date and optional valid barber/time window.'});
     const x=await pool.query(`INSERT INTO shop_waitlist_entries(shop_id,customer_id,service_id,preferred_staff_id,requested_date,preferred_time_start,preferred_time_end)
       SELECT sh.id,$2,sv.id,$4,$5,$6,$7 FROM shops sh JOIN services sv ON sv.shop_id=sh.id
-      WHERE sh.id=$1 AND sh.is_active=TRUE AND sv.id=$3 AND sv.is_active=TRUE AND $5::date >= (NOW() AT TIME ZONE sh.timezone)::date
+      LEFT JOIN shop_staff st ON st.id=$4 AND st.shop_id=sh.id AND st.is_active=TRUE
+      WHERE sh.id=$1 AND sh.is_active=TRUE AND sv.id=$3 AND sv.is_active=TRUE AND ($4::bigint IS NULL OR st.id IS NOT NULL)
+      AND $5::date >= (NOW() AT TIME ZONE sh.timezone)::date
       RETURNING id,shop_id,service_id,preferred_staff_id,requested_date,status,created_at`,
       [shop,q.user.id,service,staff,day,start,end]);
     if(!x.rowCount)return s.status(404).json({error:'Active shop or service not found.'});
