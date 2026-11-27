@@ -412,13 +412,35 @@ function createOperationsRouter(pool, tokenService) {
     if(!shopId||!await shopAccess(req.user,shopId)) return res.status(404).json({error:'Shop not found.'});
     if(q.length<2||q.length>100) return res.status(400).json({error:'Search with at least 2 characters.'});
     const result=await pool.query(
-      `SELECT id,name,email FROM users WHERE role='CUSTOMER' AND is_active=TRUE
-       AND (name ILIKE $1 OR email ILIKE $1)
-       AND EXISTS(SELECT 1 FROM appointments a WHERE a.customer_id=users.id AND a.shop_id=$2)
+      `SELECT id,name,email,phone FROM users WHERE role='CUSTOMER' AND is_active=TRUE
+       AND (name ILIKE $1 OR email ILIKE $1 OR phone ILIKE $1)
+       AND (EXISTS(SELECT 1 FROM appointments a WHERE a.customer_id=users.id AND a.shop_id=$2) OR EXISTS(SELECT 1 FROM shop_customer_profiles cp WHERE cp.customer_id=users.id AND cp.shop_id=$2))
        ORDER BY name LIMIT 20`,['%'+q+'%',shopId]);
     res.json({customers:result.rows});
   }));
 
+  router.post('/shops/:shopId/customers', ...frontDesk, asyncRoute(async(req,res)=>{
+    const shopId=id(req.params.shopId),b=req.body||{};
+    const name=typeof b.name==='string'?b.name.trim():'';
+    const email=typeof b.email==='string'?b.email.trim().toLowerCase():'';
+    const phone=typeof b.phone==='string'?b.phone.trim():'';
+    if(!shopId||!name||name.length>120||email.length>254||! /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) return res.status(400).json({error:'Provide a valid name and email.'});
+    if(phone&&(phone.length>30||!/^[+\\d().\\-\\s]{7,30}$/.test(phone))) return res.status(400).json({error:'Provide a valid phone number.'});
+    if(!await shopAccess(req.user,shopId))return res.status(404).json({error:'Shop not found.'});
+    const client=await pool.connect();
+    try {
+      await client.query('BEGIN');
+      const shop=await client.query('SELECT id FROM shops WHERE id=$1 AND is_active=TRUE FOR SHARE',[shopId]);
+      if(!shop.rowCount){await client.query('ROLLBACK');return res.status(404).json({error:'Active shop not found.'});}
+      const existing=await client.query('SELECT id,name,email,phone,role,is_active FROM users WHERE email=$1 FOR UPDATE',[email]);
+      let customer,created=false;
+      if(existing.rowCount){const found=existing.rows[0];if(found.role!=='CUSTOMER'||!found.is_active){await client.query('ROLLBACK');return res.status(409).json({error:'Email already belongs to a non-customer or inactive account.'});}customer=found;await client.query("UPDATE users SET phone=COALESCE(NULLIF($2,''),phone),updated_at=NOW() WHERE id=$1",[customer.id,phone]);}
+      else {const placeholder=crypto.randomBytes(48).toString('base64url');const hash=await argon2.hash(placeholder,{type:argon2.argon2id,memoryCost:19456,timeCost:2,parallelism:1});const result=await client.query("INSERT INTO users(name,email,phone,password_hash,role,is_active,imported_pending_activation) VALUES($1,$2,NULLIF($3,''),$4,'CUSTOMER',TRUE,TRUE) RETURNING id,name,email,phone,role,is_active",[name,email,phone,hash]);customer=result.rows[0];created=true;}
+      await client.query('INSERT INTO shop_customer_profiles(shop_id,customer_id) VALUES($1,$2) ON CONFLICT(shop_id,customer_id) DO NOTHING',[shopId,customer.id]);
+      await client.query('COMMIT');
+      return res.status(created?201:200).json({customer,created,message:created?'Customer added. They can claim the account by registering with this email.':'Existing customer linked to this shop.'});
+    } catch(error) {await client.query('ROLLBACK').catch(()=>{});if(error.code==='23505')return res.status(409).json({error:'Customer email already exists.'});throw error;} finally {client.release();}
+  }));
   router.get('/front-desk/appointments', ...frontDeskRoles, asyncRoute(async(req,res)=>{
     const shopId=id(req.query.shopId), from=req.query.from, to=req.query.to;
     if(!shopId || !validDate(from) || !validDate(to) || from>to ||
