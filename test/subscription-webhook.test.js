@@ -44,6 +44,11 @@ test('webhook normalization preserves provider event identity and timestamps', (
   assert.equal(normalized.providerCreatedAt, new Date(1795800000 * 1000).toISOString());
 });
 
+test('webhook normalization ignores invalid provider timestamps', () => {
+  const normalized = normalizeSubscriptionWebhook({ id: 'evt_without_time', event: 'subscription.pending', created_at: 0 }, Buffer.from('{}'));
+  assert.equal(normalized.providerCreatedAt, null);
+});
+
 test('webhook normalization has a stable raw-body hash when provider event id is absent', () => {
   const raw = Buffer.from('same-raw-body');
   const first = normalizeSubscriptionWebhook({ event: 'subscription.pending' }, raw);
