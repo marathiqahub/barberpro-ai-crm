@@ -228,4 +228,4 @@ No DNS, domain purchase, Render custom-domain, environment-variable, account, or
 
 ## SaaS subscription model
 
-BarberPro shop subscriptions, Razorpay plan setup, 14-day trials, cancellation, webhook configuration and feature entitlements are documented in [docs/subscription-model.md](docs/subscription-model.md). Migration `033_subscription_trial_lifecycle.sql` adds trial expiry and cancellation state. Existing shops without subscription records retain legacy access during rollout.
+BarberPro shop subscriptions, Razorpay plan setup, 14-day trials, cancellation, webhook configuration and feature entitlements are documented in [docs/subscription-model.md](docs/subscription-model.md). Migrations `033_subscription_trial_lifecycle.sql` and `035_subscription_webhook_safety.sql` add trial lifecycle and webhook safety state. Existing shops without subscription records retain legacy access during rollout.
