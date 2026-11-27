@@ -113,8 +113,9 @@ function createSubscriptionRouter(pool,tokenService,options={}) {
       current_end=COALESCE(to_timestamp(NULLIF($4,'')::numeric),current_end),next_charge_at=COALESCE(to_timestamp(NULLIF($5,'')::numeric),next_charge_at),
       cancelled_at=CASE WHEN $2='CANCELLED' THEN NOW() ELSE cancelled_at END,updated_at=NOW() WHERE id=$1`,
       [sub.id,status,String(entity.current_start||''),String(entity.current_end||''),String(entity.charge_at||'')]);
+    if(event==='subscription.halted')await c.query("UPDATE shop_subscriptions SET last_payment_failed_at=NOW(),failure_count=failure_count+1,reminder_sent_at=NULL WHERE id=$1",[sub.id]);
     if(payment.id){
-     const failed=event==='subscription.halted'||event==='payment.failed',paid=event==='subscription.charged'||payment.status==='captured';
+     const failed=payment.status==='failed',paid=event==='subscription.charged'||payment.status==='captured';
      await c.query(`INSERT INTO subscription_payments(shop_id,subscription_id,razorpay_payment_id,razorpay_invoice_id,amount_paise,status,failure_reason,paid_at,provider_payload)
       VALUES($1,$2,$3,$4,$5,$6,$7,CASE WHEN $6='CAPTURED' THEN NOW() END,$8::jsonb)
       ON CONFLICT(razorpay_payment_id) DO UPDATE SET status=EXCLUDED.status,failure_reason=EXCLUDED.failure_reason,provider_payload=EXCLUDED.provider_payload`,
