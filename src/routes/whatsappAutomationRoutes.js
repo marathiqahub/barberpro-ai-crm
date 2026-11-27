@@ -55,7 +55,7 @@ function createWhatsAppAutomationRouter(pool,tokens,options={}){
    const sent=await deliver('WHATSAPP',thread.rows[0].sender,{body},env,fetchImpl,{provider:'META',phoneNumberId:thread.rows[0].whatsapp_phone_number_id,allowFreeform:true});
    const saved=await pool.query(`INSERT INTO shop_whatsapp_conversation_messages(conversation_id,direction,body,ai_generated,provider_message_id,delivery_status)
     VALUES($1,'OUTBOUND',$2,FALSE,$3,'SENT') RETURNING id,created_at`,[conversation,body,sent?.reference||null]);
-   await pool.query('UPDATE shop_whatsapp_conversations SET last_message_at=NOW(),updated_at=NOW(),expires_at=NOW()+INTERVAL '180 days' WHERE id=$1',[conversation]);
+   await pool.query(`UPDATE shop_whatsapp_conversations SET last_message_at=NOW(),updated_at=NOW(),expires_at=NOW()+INTERVAL '180 days' WHERE id=$1`,[conversation]);
    return s.status(201).json({message:{id:saved.rows[0].id,body,created_at:saved.rows[0].created_at,delivery_status:'SENT'}});
   }catch(error){
    await pool.query(`INSERT INTO shop_whatsapp_conversation_messages(conversation_id,direction,body,ai_generated,delivery_status)
@@ -67,7 +67,7 @@ function createWhatsAppAutomationRouter(pool,tokens,options={}){
   const shop=id(q.params.shopId),conversation=id(q.params.conversationId),status=q.body?.status;
   if(!await ensureShop(shop,s))return;
   if(!['AI','HUMAN','RESOLVED'].includes(status))return s.status(400).json({error:'Status must be AI, HUMAN or RESOLVED.'});
-  const out=await pool.query('UPDATE shop_whatsapp_conversations SET status=$3,assigned_to=CASE WHEN $3=\'HUMAN\' THEN $4 ELSE assigned_to END,updated_at=NOW() WHERE id=$1 AND shop_id=$2 RETURNING id,status,assigned_to',[conversation,shop,status,q.user.id]);
+  const out=await pool.query(`UPDATE shop_whatsapp_conversations SET status=$3,assigned_to=CASE WHEN $3='HUMAN' THEN $4 ELSE assigned_to END,updated_at=NOW(),expires_at=NOW()+INTERVAL '180 days' WHERE id=$1 AND shop_id=$2 RETURNING id,status,assigned_to`,[conversation,shop,status,q.user.id]);
   if(!out.rowCount)return s.status(404).json({error:'Conversation not found.'});
   s.json({conversation:out.rows[0]});
  }));
