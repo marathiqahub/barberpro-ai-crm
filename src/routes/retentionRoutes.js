@@ -149,6 +149,8 @@ function createRetentionRouter(pool, tokens) {
 
   r.get('/customer/shops/:shopId/preferences',...customer,wrap(async(q,s)=>{
     const shop=id(q.params.shopId);if(!shop)return s.status(400).json({error:'Invalid shop id.'});
+    const activeShop=await pool.query('SELECT id FROM shops WHERE id=$1 AND is_active=TRUE',[shop]);
+    if(!activeShop.rowCount)return s.status(404).json({error:'Active shop not found.'});
     const [profile,messaging,events,contact,rebooking]=await Promise.all([
       pool.query(`SELECT
         to_jsonb(p) || jsonb_build_object(
@@ -280,6 +282,8 @@ function createRetentionRouter(pool, tokens) {
   }));
   r.get('/customer/shops/:shopId/rebooking-preference',...customer,wrap(async(q,s)=>{
     const shop=id(q.params.shopId);if(!shop)return s.status(400).json({error:'Invalid shop id.'});
+    const activeShop=await pool.query('SELECT id FROM shops WHERE id=$1 AND is_active=TRUE',[shop]);
+    if(!activeShop.rowCount)return s.status(404).json({error:'Active shop not found.'});
     const x=await pool.query('SELECT interval_days,enabled FROM shop_customer_rebooking_profiles WHERE shop_id=$1 AND customer_id=$2',[shop,q.user.id]);
     s.json({preference:x.rows[0]||{interval_days:21,enabled:false}});
   }));

@@ -33,6 +33,7 @@ test('PostgreSQL customer preference integration', {skip:!process.env.TEST_DATAB
   `);
   const shop=(await db.query("INSERT INTO shops(name) VALUES('Test shop') RETURNING id")).rows[0].id;
   const other=(await db.query("INSERT INTO shops(name) VALUES('Other shop') RETURNING id")).rows[0].id;
+  const inactive=(await db.query("INSERT INTO shops(name,is_active) VALUES('Inactive shop',FALSE) RETURNING id")).rows[0].id;
   const customer=(await db.query("INSERT INTO users(name,email,phone,role) VALUES('Customer','customer@test.invalid','+919876543210','CUSTOMER') RETURNING id")).rows[0].id;
   const adminUser=(await db.query("INSERT INTO users(name,email,role) VALUES('Admin','admin@test.invalid','ADMIN') RETURNING id")).rows[0].id;
   await db.query("INSERT INTO refresh_tokens(user_id,family_id,expires_at) VALUES($1,'customer-family',NOW()+INTERVAL '1 day'),($2,'admin-family',NOW()+INTERVAL '1 day')",[customer,adminUser]);
@@ -53,6 +54,18 @@ test('PostgreSQL customer preference integration', {skip:!process.env.TEST_DATAB
    assert.equal(Number(data.profile.preferred_staff_id),Number(staff));assert.equal(data.consents.profileNotes,false);
    assert.equal(data.consents.marketing,false);assert.equal(data.consents.whatsapp,false);assert.equal(data.consents.sms,false);
    assert.equal(data.profile.skin_notes,null);assert.equal(data.profile.allergy_notes,null);assert.equal(data.profile.notes,null);
+  });
+  await t.test('inactive shops cannot be used to read customer preferences or rebooking settings',async()=>{
+   const preferences=await call('/customer/shops/'+inactive+'/preferences');assert.equal(preferences.status,404);
+   const rebooking=await call('/customer/shops/'+inactive+'/rebooking-preference');assert.equal(rebooking.status,404);
+   const update=await call('/customer/shops/'+inactive+'/preferences','customer','PUT',consentOff);assert.equal(update.status,404);
+  });
+  await t.test('customer preference reads never expose another customer profile',async()=>{
+   const otherCustomer=(await db.query("INSERT INTO users(name,email,role) VALUES('Other Customer','other@test.invalid','CUSTOMER') RETURNING id")).rows[0].id;
+   await db.query("INSERT INTO shop_customer_profiles(shop_id,customer_id,skin_notes) VALUES($1,$2,'other customer secret')",[shop,otherCustomer]);
+   await db.query("INSERT INTO shop_customer_consent_events(shop_id,customer_id,purpose,consent) VALUES($1,$2,'PROFILE_NOTES',TRUE)",[shop,otherCustomer]);
+   const res=await call('/customer/shops/'+shop+'/preferences');const body=await res.json();
+   assert.equal(res.status,200);assert.doesNotMatch(JSON.stringify(body),/other customer secret/);
   });
   await t.test('withdrawal clears sensitive note columns and API redacts private notes',async()=>{
    await db.query("INSERT INTO shop_customer_consent_events(shop_id,customer_id,purpose,consent) VALUES($1,$2,'PROFILE_NOTES',TRUE)",[shop,customer]);
