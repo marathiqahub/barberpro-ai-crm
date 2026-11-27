@@ -15,16 +15,19 @@ async function processWhatsAppAssistant(pool,{shopId,sender,body,customerId=null
  const thread=conversation.rows[0],convId=thread.id;
  await pool.query(`INSERT INTO shop_whatsapp_conversation_messages(conversation_id,direction,body)
   VALUES($1,'INBOUND',$2)`,[convId,text]);
+ if(!customerId)await pool.query(`INSERT INTO shop_whatsapp_leads(shop_id,conversation_id,sender,interest)
+  VALUES($1,$2,$3,$4) ON CONFLICT(shop_id,sender) DO UPDATE SET conversation_id=EXCLUDED.conversation_id,interest=LEFT(COALESCE(shop_whatsapp_leads.interest,'')||' '||EXCLUDED.interest,500),updated_at=NOW()`,[shopId,convId,sender,text]);
+ if(thread.status==='HUMAN')return null;
  const configured=(settings.whatsapp_handoff_keywords||[]).some(k=>String(k).trim()&&text.toLowerCase().includes(String(k).toLowerCase()));
- if(thread.status==='HUMAN'||HANDOFF_RE.test(text)||configured){
+ if(HANDOFF_RE.test(text)||configured){
   await pool.query(`UPDATE shop_whatsapp_conversations SET status='HUMAN',last_message_at=NOW(),updated_at=NOW() WHERE id=$1`,[convId]);
   await pool.query(`INSERT INTO shop_whatsapp_leads(shop_id,conversation_id,sender,interest)
    VALUES($1,$2,$3,$4) ON CONFLICT(shop_id,sender) DO UPDATE SET conversation_id=EXCLUDED.conversation_id,interest=EXCLUDED.interest,updated_at=NOW()`,
    [shopId,convId,sender,text]);
   const reply='I have passed your message to the shop team. A team member will reply here as soon as possible.';
-  await pool.query(`INSERT INTO shop_whatsapp_conversation_messages(conversation_id,direction,body,ai_generated)
-   VALUES($1,'OUTBOUND',$2,FALSE)`,[convId,reply]);
-  return {body:reply,conversationId:convId,handedOff:true};
+  const savedReply=await pool.query(`INSERT INTO shop_whatsapp_conversation_messages(conversation_id,direction,body,ai_generated)
+   VALUES($1,'OUTBOUND',$2,FALSE) RETURNING id`,[convId,reply]);
+  return {body:reply,conversationId:convId,outboundMessageId:savedReply.rows[0].id,handedOff:true};
  }
  if(thread.status==='RESOLVED'){
   await pool.query(`UPDATE shop_whatsapp_conversations SET status='AI' WHERE id=$1`,[convId]);
@@ -59,9 +62,9 @@ async function processWhatsAppAssistant(pool,{shopId,sender,body,customerId=null
    reply='I can help with services and bookings. Reply SERVICES to see the current service list, or type HUMAN to speak with the shop team.';
   }
  }
- await pool.query(`INSERT INTO shop_whatsapp_conversation_messages(conversation_id,direction,body,ai_generated)
-  VALUES($1,'OUTBOUND',$2,TRUE)`,[convId,reply]);
+ const savedReply=await pool.query(`INSERT INTO shop_whatsapp_conversation_messages(conversation_id,direction,body,ai_generated)
+  VALUES($1,'OUTBOUND',$2,TRUE) RETURNING id`,[convId,reply]);
  await pool.query(`UPDATE shop_whatsapp_conversations SET last_message_at=NOW(),updated_at=NOW() WHERE id=$1`,[convId]);
- return {body:reply,conversationId:convId,handedOff:false};
+ return {body:reply,conversationId:convId,outboundMessageId:savedReply.rows[0].id,handedOff:false};
 }
 module.exports={processWhatsAppAssistant,COMMAND_RE};
