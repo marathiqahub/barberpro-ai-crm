@@ -37,7 +37,7 @@ async function processWhatsAppAssistant(pool,{shopId,sender,body,customerId=null
   pool.query(`SELECT direction,body FROM shop_whatsapp_conversation_messages WHERE conversation_id=$1 ORDER BY created_at DESC,id DESC LIMIT 9`,[convId]),
   pool.query(`SELECT name,price,duration_minutes FROM services WHERE shop_id=$1 AND is_active=TRUE ORDER BY name LIMIT 30`,[shopId]),
   pool.query(`SELECT display_name FROM shop_staff WHERE shop_id=$1 AND is_active=TRUE ORDER BY display_name LIMIT 20`,[shopId]),
-  pool.query(`SELECT policy_text,cancellation_notice_hours,deposit_enabled,google_review_url FROM shop_booking_policies WHERE shop_id=$1`,[shopId])
+  pool.query(`SELECT cancellation_notice_hours,deposit_enabled FROM shop_booking_policies WHERE shop_id=$1`,[shopId])
  ]);
  const historyMessages=history.rows.reverse().slice(0,-1).map(x=>({role:x.direction==='INBOUND'?'user':'assistant',content:x.body}));
  const context={shop:settings.name,services:services.rows.map(x=>({name:x.name,price_inr:Number(x.price),duration_minutes:x.duration_minutes})),barbers:staff.rows.map(x=>x.display_name),bookingPolicy:policy.rows[0]||{}};
