@@ -14,11 +14,12 @@ function createWhatsAppAutomationRouter(pool,tokens,options={}){
    pool.query(`SELECT whatsapp_phone_number_id,whatsapp_business_account_id,enabled_channels,whatsapp_ai_enabled,whatsapp_ai_locale,whatsapp_ai_greeting,whatsapp_handoff_keywords,updated_at FROM shop_messaging_settings WHERE shop_id=$1`,[shop]),
    pool.query(`SELECT (SELECT COUNT(*)::int FROM shop_whatsapp_conversations WHERE shop_id=$1 AND status='HUMAN') waiting_human,(SELECT COUNT(*)::int FROM shop_whatsapp_leads WHERE shop_id=$1 AND status='NEW') new_leads,(SELECT COUNT(*)::int FROM shop_whatsapp_conversations WHERE shop_id=$1) conversations`,[shop])
   ]);
-  s.json({settings:settings.rows[0]||{enabled_channels:[],whatsapp_ai_enabled:false,whatsapp_ai_locale:'en',whatsapp_handoff_keywords:['HUMAN','AGENT','PERSON','CALL ME']},...counts.rows[0]});
+  s.json({settings:settings.rows[0]||{enabled_channels:[],whatsapp_ai_enabled:false,whatsapp_ai_locale:'en',whatsapp_handoff_keywords:['HUMAN','AGENT','PERSON','CALL ME']},aiProviderConfigured:Boolean(env.OPENAI_API_KEY),...counts.rows[0]});
  }));
  r.put('/admin/shops/:shopId/whatsapp-automation',...admin,wrap(async(q,s)=>{
   const shop=id(q.params.shopId),b=q.body||{};
   if(!await ensureShop(shop,s))return;
+  if(b.aiEnabled&&!env.OPENAI_API_KEY)return s.status(503).json({error:'Configure OPENAI_API_KEY on the BarberPro web service before enabling the AI receptionist.'});
   if(typeof b.aiEnabled!=='boolean'||!['en','hi','mr'].includes(b.locale||'en')||(b.greeting!==undefined&&(typeof b.greeting!=='string'||b.greeting.length>500))||!Array.isArray(b.handoffKeywords)||b.handoffKeywords.length>12||b.handoffKeywords.some(x=>typeof x!=='string'||!x.trim()||x.length>40))return s.status(400).json({error:'Provide AI enabled, supported locale, a greeting up to 500 characters and up to 12 handoff keywords.'});
   const out=await pool.query(`INSERT INTO shop_messaging_settings(shop_id,whatsapp_provider,enabled_channels,whatsapp_ai_enabled,whatsapp_ai_locale,whatsapp_ai_greeting,whatsapp_handoff_keywords,updated_by,updated_at)
    VALUES($1,'META',ARRAY['IN_APP']::text[],$2,$3,$4,$5,$6,NOW())
