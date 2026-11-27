@@ -6,6 +6,11 @@ const {offerWaitlistEntry}=require('../src/routes/retentionRoutes');
 const {queueRebookingNudges}=require('../src/messaging/rebooking');
 const pool=new Pool({connectionString:process.env.DATABASE_URL,max:2});
 async function purgeExpiredReferencePhotos(){ await pool.query('DELETE FROM shop_appointment_reference_photos WHERE retention_until<=NOW()'); }
+async function expireSubscriptionTrials(){
+ const result=await pool.query(`UPDATE shop_subscriptions SET status='EXPIRED',updated_at=NOW()
+  WHERE status='TRIALING' AND trial_ends_at IS NOT NULL AND trial_ends_at<=NOW() RETURNING id`);
+ return result.rowCount;
+}
 async function refillExpiredWaitlistOffers(){
  const expired=await pool.query(`UPDATE shop_waitlist_entries SET status='EXPIRED',updated_at=NOW()
   WHERE status='OFFERED' AND offer_expires_at<=NOW() RETURNING shop_id,offered_from_appointment_id`);
@@ -50,6 +55,8 @@ async function queueRebookingAndReviewNudges(){
 }
 async function run(){
  if(!process.env.DATABASE_URL)throw new Error('DATABASE_URL is required');
+ const expiredTrials=await expireSubscriptionTrials();
+ if(expiredTrials)console.log('Expired subscription trials:',expiredTrials);
  await purgeExpiredReferencePhotos();
  await refillExpiredWaitlistOffers();
  await queueMissingAppointmentReminders();
