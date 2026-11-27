@@ -15,7 +15,7 @@ test('PostgreSQL subscription lifecycle and webhook idempotency', {skip:!url}, a
   await client.query('BEGIN');
   const shop=await client.query("INSERT INTO shops(name,slug) VALUES($1,$2) RETURNING id",['Billing test shop','billing-test-'+crypto.randomUUID()]);
   shopId=shop.rows[0].id;
-  const plan=await client.query("INSERT INTO barberpro_subscription_plans(code,name,billing_period,amount_paise,feature_entitlements) VALUES($1,'Test plan','MONTHLY',49900,'{\"ADVANCED_REPORTS\":true}'::jsonb) RETURNING id",['test-'+crypto.randomUUID()]);
+  const plan=await client.query("INSERT INTO barberpro_subscription_plans(code,name,billing_period,amount_paise,feature_entitlements) VALUES($1,'Test plan','MONTHLY',49900,'{\"ADVANCED_REPORTS\":true}'::jsonb) RETURNING id",['test-'+crypto.randomUUID().slice(0,30)]);
   planId=plan.rows[0].id;
   const trial=await client.query("INSERT INTO shop_subscriptions(shop_id,plan_id,status,trial_ends_at) VALUES($1,$2,'TRIALING',NOW()+INTERVAL '14 days') RETURNING id,status,trial_ends_at",[shopId,planId]);
   subId=trial.rows[0].id;
@@ -51,7 +51,7 @@ test('PostgreSQL subscription lifecycle and webhook idempotency', {skip:!url}, a
 
 test('signed Razorpay webhook activates once and safely acknowledges duplicate delivery', {skip:!url}, async()=>{
  const pool=new Pool({connectionString:url,max:3}),secret=crypto.randomBytes(32).toString('hex');
- const slug='webhook-test-'+crypto.randomUUID(),planCode='webhook-'+crypto.randomUUID(),providerId='sub_'+crypto.randomUUID(),eventId='evt_'+crypto.randomUUID();
+ const slug='webhook-test-'+crypto.randomUUID(),planCode='wh-'+crypto.randomUUID().slice(0,32),providerId='sub_'+crypto.randomUUID(),eventId='evt_'+crypto.randomUUID();
  let shopId,planId,subscriptionId,server;
  try{
   const shop=await pool.query('INSERT INTO shops(name,slug) VALUES($1,$2) RETURNING id',['Webhook test shop',slug]);shopId=shop.rows[0].id;
