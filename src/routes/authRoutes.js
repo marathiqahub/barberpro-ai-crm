@@ -9,7 +9,8 @@ function createAuthRouter(pool) {
   const router = express.Router();
   const config = loadAuthConfig();
   const controller = createAuthController(pool, config);
-  const { authenticate } = createAuthMiddleware(pool, controller.tokens);
+  const { authenticate, requireRole } = createAuthMiddleware(pool, controller.tokens);
+  const customerOnly = [authenticate, requireRole('CUSTOMER')];
 
   router.use((req, res, next) => {
     res.set('Cache-Control', 'no-store');
@@ -68,6 +69,11 @@ function createAuthRouter(pool) {
   router.post('/logout', refreshLimiter, csrfForRefresh, (req,res,next)=>{res.clearCookie('bp_access',{path:'/'});res.clearCookie('bp_refresh',{path:'/'});res.clearCookie('bp_csrf',{path:'/'});controller.logout(req,res,next);});
 
   router.get('/me', authenticate, controller.me);
+  router.put('/profile', ...customerOnly, async (req,res,next)=>{
+    const b=req.body||{},name=typeof b.name==='string'?b.name.trim():'',phone=typeof b.phone==='string'?b.phone.trim():'';
+    if(!name||name.length>120||(phone&&(phone.length>30||!/^[+\\d().\\-\\s]{7,30}$/.test(phone))))return res.status(400).json({error:'Provide a valid name and optional phone number.'});
+    try{const result=await pool.query("UPDATE users SET name=$2,phone=NULLIF($3,''),updated_at=NOW() WHERE id=$1 AND role='CUSTOMER' AND is_active=TRUE RETURNING id,name,email,phone,role",[req.user.id,name,phone]);if(!result.rowCount)return res.status(404).json({error:'Customer account not found.'});return res.json({user:result.rows[0]});}catch(error){return next(error)}
+  });
 
   return router;
 }
