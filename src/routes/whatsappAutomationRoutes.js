@@ -4,7 +4,7 @@ const {createAuthMiddleware}=require('../auth/middleware');
 function createWhatsAppAutomationRouter(pool,tokens){
  const r=express.Router(),{authenticate,requireRole}=createAuthMiddleware(pool,tokens),admin=[authenticate,requireRole('ADMIN')];
  const wrap=fn=>(q,s,n)=>Promise.resolve(fn(q,s)).catch(n);
- const id=v=>/^[1-9]\\d*$/.test(String(v))?Number(v):null;
+ const id=v=>/^[1-9]\d*$/.test(String(v))?Number(v):null;
  async function ensureShop(shop,res){if(!shop){res.status(400).json({error:'Invalid shop id.'});return false;}const x=await pool.query('SELECT id FROM shops WHERE id=$1 AND is_active=TRUE',[shop]);if(!x.rowCount){res.status(404).json({error:'Active shop not found.'});return false;}return true;}
  r.get('/admin/shops/:shopId/whatsapp-automation',...admin,wrap(async(q,s)=>{
   const shop=id(q.params.shopId);if(!await ensureShop(shop,s))return;
