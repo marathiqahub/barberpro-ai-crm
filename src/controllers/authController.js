@@ -235,7 +235,7 @@ function createAuthController(pool, authConfig) {
   async function me(req, res, next) {
     try {
       const result = await pool.query(
-        `SELECT id, name, email, role, created_at
+        `SELECT id, name, email, phone, role, created_at
          FROM users WHERE id = $1 AND is_active = TRUE`,
         [req.user.id]
       );
