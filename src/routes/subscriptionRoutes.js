@@ -24,11 +24,10 @@ function createSubscriptionRouter(pool,tokenService,options={}) {
   const q=await pool.query("SELECT 1 FROM shop_billing_members WHERE shop_id=$1 AND user_id=$2 AND role IN('SHOP_OWNER','BILLING_ADMIN')",[shopId,user.id]);
   return q.rowCount>0;
  }
- async function billing(req,res,next) {
+ function billing(req,res,next) {
   const shopId=validId(req.params.shopId);
   if(!shopId)return res.status(400).json({error:'Invalid shop id.'});
-  if(!await canBill(req.user,shopId))return res.status(403).json({error:'Billing access is limited to your own shop.'});
-  req.shopId=shopId;next();
+  canBill(req.user,shopId).then(allowed=>{if(!allowed)return res.status(403).json({error:'Billing access is limited to your own shop.'});req.shopId=shopId;next();}).catch(next);
  }
  r.post('/admin/subscription-plans',...admin,wrap(async(q,s)=>{
   const {code,name,billingPeriod,amountPaise,featureEntitlements={}}=q.body||{};
