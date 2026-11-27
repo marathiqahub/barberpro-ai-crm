@@ -424,8 +424,8 @@ function createOperationsRouter(pool, tokenService) {
     const name=typeof b.name==='string'?b.name.trim():'';
     const email=typeof b.email==='string'?b.email.trim().toLowerCase():'';
     const phone=typeof b.phone==='string'?b.phone.trim():'';
-    if(!shopId||!name||name.length>120||email.length>254||! /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email)) return res.status(400).json({error:'Provide a valid name and email.'});
-    if(phone&&(phone.length>30||!/^[+\\d().\\-\\s]{7,30}$/.test(phone))) return res.status(400).json({error:'Provide a valid phone number.'});
+    if(!shopId||!name||name.length>120||email.length>254||! /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return res.status(400).json({error:'Provide a valid name and email.'});
+    if(phone&&(phone.length>30||!/^[+\d().\-\s]{7,30}$/.test(phone))) return res.status(400).json({error:'Provide a valid phone number.'});
     if(!await shopAccess(req.user,shopId))return res.status(404).json({error:'Shop not found.'});
     const client=await pool.connect();
     try {
@@ -474,6 +474,7 @@ function createOperationsRouter(pool, tokenService) {
         `SELECT st.id staff_id,sv.id service_id,sv.duration_minutes,sv.cleanup_minutes
          FROM shop_staff st JOIN services sv ON sv.shop_id=st.shop_id
          JOIN users u ON u.id=$4 AND u.role='CUSTOMER' AND u.is_active=TRUE
+           AND (EXISTS(SELECT 1 FROM appointments prior WHERE prior.shop_id=$1 AND prior.customer_id=u.id) OR EXISTS(SELECT 1 FROM shop_customer_profiles cp WHERE cp.shop_id=$1 AND cp.customer_id=u.id))
          WHERE st.id=$2 AND sv.id=$3 AND st.shop_id=$1 AND st.is_active=TRUE AND sv.is_active=TRUE
            AND (NOT EXISTS(SELECT 1 FROM staff_services ss WHERE ss.staff_id=st.id)
                 OR EXISTS(SELECT 1 FROM staff_services ss WHERE ss.staff_id=st.id AND ss.service_id=sv.id))
