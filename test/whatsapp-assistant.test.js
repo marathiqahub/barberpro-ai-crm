@@ -54,7 +54,7 @@ test('explicit human request pauses AI and creates a handoff lead',async()=>{
 test('existing human-owned conversation does not send another bot reply',async()=>{
  const pool=fakePool({status:'HUMAN'});
  const result=await processWhatsAppAssistant(pool,{shopId:4,sender:'919876543210',body:'Any update?',env:{}});
- assert.equal(result,null);
+ assert.equal(result.suppressReply,true);
  assert.equal(pool.statements.some(x=>x.sql.includes("VALUES($1,'OUTBOUND'")),false);
 });
 
