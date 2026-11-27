@@ -35,9 +35,11 @@ The amount is in paise: ₹499 = 49900. Create separate monthly and yearly plan 
 - `GET /api/admin/shops/:shopId/subscription` — inspect current/latest status and feature entitlements.
 - `PATCH /api/admin/shops/:shopId/subscription/cancel` — cancel trial immediately, or paid subscription at period end by default. Send `{"cancelAtCycleEnd": false}` to request immediate cancellation from Razorpay.
 - `GET /api/shops/:shopId/feature-entitlements` — shop-accessible feature flags.
-- `POST /api/admin/subscriptions/refresh-trials` — mark elapsed trials EXPIRED.
+- `POST /api/admin/subscriptions/refresh-trials` — manually mark elapsed trials EXPIRED. The existing scheduled `reminders:deliver` worker also expires elapsed trials automatically on its configured schedule.
 
-Razorpay webhook endpoint: `POST /api/subscriptions/webhook`. Configure the provider events `subscription.activated`, `subscription.authenticated`, `subscription.pending`, `subscription.halted`, `subscription.cancelled`, `subscription.completed`, and `subscription.charged`. Set `RAZORPAY_SUBSCRIPTION_WEBHOOK_SECRET` to the webhook signing secret; the existing `RAZORPAY_WEBHOOK_SECRET` is accepted as a fallback. Webhook signatures are checked against the raw request body.
+The Admin workspace provides plan creation, trial start, paid checkout-link creation, current subscription status and cancellation controls. The shop remains gated by verified provider status; creating a checkout link does not grant paid access.
+
+Razorpay webhook endpoint: `POST /api/subscriptions/webhook`. The endpoint requires the exact raw request body and a valid HMAC-SHA256 signature. Provider event IDs are persisted for retry deduplication, and older provider events cannot overwrite a newer lifecycle state. Configure the provider events `subscription.activated`, `subscription.authenticated`, `subscription.pending`, `subscription.halted`, `subscription.cancelled`, `subscription.completed`, and `subscription.charged`. Set `RAZORPAY_SUBSCRIPTION_WEBHOOK_SECRET` to the webhook signing secret; the existing `RAZORPAY_WEBHOOK_SECRET` is accepted as a fallback. Webhook signatures are checked against the raw request body.
 
 ## Feature gating and legacy shops
 
@@ -47,4 +49,4 @@ A shop is not considered paid merely because checkout was created. Activate acce
 
 ## Migration
 
-Migration `033_subscription_trial_lifecycle.sql` adds trial expiry and cancellation fields. The migration runner applies numbered migrations in order. For an existing deployment, run the normal `npm run db:migrate` command with the production database URL configured.
+Migration `035_subscription_webhook_safety.sql` adds webhook event deduplication, provider-event ordering metadata and a unique live-subscription index that includes trials. It is additive and preserves existing shop/account/subscription rows. Earlier migration files are immutable; the runner tracks full filenames and checksums, so the existing `033_` prefix pair is not itself a filename collision. Apply migrations through the normal reviewed deployment process only after the PR is merged; never run them against production as part of PR preparation.
