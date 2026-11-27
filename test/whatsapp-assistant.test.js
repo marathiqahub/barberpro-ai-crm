@@ -73,8 +73,8 @@ test('turning AI off does not resume automated replies on a human-owned thread',
 
 test('disabled WhatsApp AI never calls the model or creates a conversation',async()=>{
  const pool=fakePool();
- pool.query=async(sql,params)=>{pool.statements.push({sql,params});return {rowCount:1,rows:[{whatsapp_ai_enabled:false,enabled_channels:['WHATSAPP']}]};};
+ pool.query=async(sql,params)=>{pool.statements.push({sql,params});if(sql.includes('SELECT m.whatsapp_ai_enabled'))return {rowCount:1,rows:[{whatsapp_ai_enabled:false,enabled_channels:['WHATSAPP']}]};return {rowCount:0,rows:[]};};
  const result=await processWhatsAppAssistant(pool,{shopId:4,sender:'919876543210',body:'Hello',env:{OPENAI_API_KEY:'not-used'},fetchImpl:async()=>{throw new Error('must not call provider')}});
  assert.equal(result,null);
- assert.equal(pool.statements.length,1);
+ assert.equal(pool.statements.length,2);
 });
