@@ -7,6 +7,7 @@ const { createAuthRouter } = require('./routes/authRoutes');
 const { createBookingRouter } = require('./routes/bookingRoutes');
 const { createDashboardRouter } = require('./routes/dashboardRoutes');
 const { createPaymentRouter } = require('./routes/paymentRoutes');
+const { createSubscriptionRouter } = require('./routes/subscriptionRoutes');
 const { createOperatorRouter } = require('./routes/operatorRoutes');
 const { createAiRouter } = require('./routes/aiRoutes');
 const { createReceptionistRouter } = require('./routes/receptionistRoutes');
@@ -87,6 +88,7 @@ app.use('/api', createWhatsAppRouter(pool));
 app.use('/api', createRetentionRouter(pool, bookingTokens));
 app.use('/api', createAdvancedRouter(pool, bookingTokens));
 app.use('/api/payments', paymentRouter);
+app.use('/api', createSubscriptionRouter(pool, bookingTokens));
 app.use('/api/marketing', createMarketingRouter(pool, bookingTokens));
 
 app.post(
