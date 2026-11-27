@@ -53,3 +53,11 @@ CREATE TABLE IF NOT EXISTS shop_whatsapp_leads (
 );
 CREATE INDEX IF NOT EXISTS whatsapp_leads_inbox_idx
   ON shop_whatsapp_leads(shop_id,status,created_at DESC);
+
+-- Inbound conversation content expires 180 days after the last activity.
+ALTER TABLE shop_whatsapp_conversations
+  ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW()+INTERVAL '180 days';
+ALTER TABLE shop_whatsapp_conversation_messages
+  ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ NOT NULL DEFAULT NOW()+INTERVAL '180 days';
+CREATE INDEX IF NOT EXISTS whatsapp_conversation_expiry_idx
+  ON shop_whatsapp_conversations(expires_at) WHERE status<>'HUMAN';
