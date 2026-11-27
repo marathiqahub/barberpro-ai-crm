@@ -1,7 +1,9 @@
 'use strict';
 const express=require('express');
 const {createAuthMiddleware}=require('../auth/middleware');
-function createWhatsAppAutomationRouter(pool,tokens){
+const {deliver}=require('../messaging/delivery');
+function createWhatsAppAutomationRouter(pool,tokens,options={}){
+ const env=options.env||process.env,fetchImpl=options.fetchImpl||global.fetch;
  const r=express.Router(),{authenticate,requireRole}=createAuthMiddleware(pool,tokens),admin=[authenticate,requireRole('ADMIN')];
  const wrap=fn=>(q,s,n)=>Promise.resolve(fn(q,s)).catch(n);
  const id=v=>/^[1-9]\d*$/.test(String(v))?Number(v):null;
@@ -40,6 +42,26 @@ function createWhatsAppAutomationRouter(pool,tokens){
   if(!thread.rowCount)return s.status(404).json({error:'Conversation not found.'});
   const messages=await pool.query('SELECT id,direction,body,ai_generated,delivery_status,created_at FROM shop_whatsapp_conversation_messages WHERE conversation_id=$1 ORDER BY created_at,id LIMIT 300',[conversation]);
   s.json({conversation:thread.rows[0],messages:messages.rows});
+ }));
+ r.post('/admin/shops/:shopId/whatsapp-inbox/:conversationId/reply',...admin,wrap(async(q,s)=>{
+  const shop=id(q.params.shopId),conversation=id(q.params.conversationId),body=typeof q.body?.body==='string'?q.body.body.trim():'';
+  if(!await ensureShop(shop,s))return;
+  if(!body||body.length>1000)return s.status(400).json({error:'Reply must contain 1–1000 characters.'});
+  const thread=await pool.query(`SELECT c.id,c.sender,c.status,m.whatsapp_phone_number_id,m.enabled_channels FROM shop_whatsapp_conversations c JOIN shop_messaging_settings m ON m.shop_id=c.shop_id WHERE c.id=$1 AND c.shop_id=$2`,[conversation,shop]);
+  if(!thread.rowCount)return s.status(404).json({error:'Conversation not found.'});
+  if(thread.rows[0].status!=='HUMAN')return s.status(409).json({error:'Take over the conversation before sending a human reply.'});
+  if(!thread.rows[0].whatsapp_phone_number_id||!thread.rows[0].enabled_channels.includes('WHATSAPP'))return s.status(409).json({error:'WhatsApp is not connected or enabled for this shop.'});
+  try{
+   const sent=await deliver('WHATSAPP',thread.rows[0].sender,{body},env,fetchImpl,{provider:'META',phoneNumberId:thread.rows[0].whatsapp_phone_number_id,allowFreeform:true});
+   const saved=await pool.query(`INSERT INTO shop_whatsapp_conversation_messages(conversation_id,direction,body,ai_generated,provider_message_id,delivery_status)
+    VALUES($1,'OUTBOUND',$2,FALSE,$3,'SENT') RETURNING id,created_at`,[conversation,body,sent?.reference||null]);
+   await pool.query('UPDATE shop_whatsapp_conversations SET last_message_at=NOW(),updated_at=NOW() WHERE id=$1',[conversation]);
+   return s.status(201).json({message:{id:saved.rows[0].id,body,created_at:saved.rows[0].created_at,delivery_status:'SENT'}});
+  }catch(error){
+   await pool.query(`INSERT INTO shop_whatsapp_conversation_messages(conversation_id,direction,body,ai_generated,delivery_status)
+    VALUES($1,'OUTBOUND',$2,FALSE,'FAILED')`,[conversation,body]);
+   return s.status(502).json({error:'WhatsApp could not deliver this reply. Check the 24-hour messaging window and Meta configuration.'});
+  }
  }));
  r.patch('/admin/shops/:shopId/whatsapp-inbox/:conversationId',...admin,wrap(async(q,s)=>{
   const shop=id(q.params.shopId),conversation=id(q.params.conversationId),status=q.body?.status;
