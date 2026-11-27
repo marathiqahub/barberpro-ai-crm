@@ -58,6 +58,19 @@ test('existing human-owned conversation does not send another bot reply',async()
  assert.equal(pool.statements.some(x=>x.sql.includes("VALUES($1,'OUTBOUND'")),false);
 });
 
+test('turning AI off does not resume automated replies on a human-owned thread',async()=>{
+ const pool=fakePool();
+ pool.query=async(sql,params=[])=>{
+  pool.statements.push({sql,params});
+  if(sql.includes('SELECT m.whatsapp_ai_enabled'))return {rowCount:1,rows:[{whatsapp_ai_enabled:false}]};
+  if(sql.includes("status='HUMAN'"))return {rowCount:1,rows:[{id:17}]};
+  return {rowCount:1,rows:[]};
+ };
+ const result=await processWhatsAppAssistant(pool,{shopId:4,sender:'919876543210',body:'Can someone call me?',env:{}});
+ assert.equal(result.suppressReply,true);
+ assert.ok(pool.statements.some(x=>x.sql.includes("VALUES($1,'INBOUND',$2)")));
+});
+
 test('disabled WhatsApp AI never calls the model or creates a conversation',async()=>{
  const pool=fakePool();
  pool.query=async(sql,params)=>{pool.statements.push({sql,params});return {rowCount:1,rows:[{whatsapp_ai_enabled:false,enabled_channels:['WHATSAPP']}]};};
