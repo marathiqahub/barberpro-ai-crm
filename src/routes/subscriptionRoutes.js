@@ -140,24 +140,25 @@ function createSubscriptionRouter(pool,tokenService,options={}) {
  r.post('/shops/:shopId/subscription/reconcile',...signed,billing,wrap(async(q,s)=>{
   const current=await pool.query("SELECT * FROM shop_subscriptions WHERE shop_id=$1 AND razorpay_subscription_id IS NOT NULL ORDER BY created_at DESC LIMIT 1",[q.shopId]);
   if(!current.rowCount)return s.status(404).json({error:'No Razorpay subscription found for this shop.'});
-  const sub=current.rows[0],payments=await provider('/payments?subscription_id='+encodeURIComponent(sub.razorpay_subscription_id));
+  const sub=current.rows[0],invoices=await provider('/invoices?subscription_id='+encodeURIComponent(sub.razorpay_subscription_id));
   let paymentCount=0,invoiceCount=0;
-  for(const p of payments.items||[]){
-   if(!p.id||!['captured','failed'].includes(p.status))continue;
-   await pool.query(`INSERT INTO subscription_payments(shop_id,subscription_id,razorpay_payment_id,razorpay_invoice_id,amount_paise,status,failure_reason,paid_at,provider_payload)
-    VALUES($1,$2,$3,$4,$5,$6,$7,CASE WHEN $6='CAPTURED' THEN to_timestamp($8) END,$9::jsonb)
-    ON CONFLICT(razorpay_payment_id) DO UPDATE SET status=EXCLUDED.status,failure_reason=EXCLUDED.failure_reason,paid_at=COALESCE(EXCLUDED.paid_at,subscription_payments.paid_at),provider_payload=EXCLUDED.provider_payload`,
-    [sub.shop_id,sub.id,p.id,p.invoice_id||null,Number(p.amount||0),p.status==='captured'?'CAPTURED':'FAILED',p.error_description||null,p.created_at||null,JSON.stringify(p)]);
-   paymentCount++;
-  }
-  const invoices=await provider('/invoices?subscription_id='+encodeURIComponent(sub.razorpay_subscription_id));
   for(const inv of invoices.items||[]){
    if(!inv.id)continue;
-   const invoiceNumber=String(inv.invoice_number||('RZP-'+inv.id));
+   if(inv.payment_id){
+    const payment=await provider('/payments/'+encodeURIComponent(inv.payment_id));
+    if(payment.id&&['captured','failed'].includes(payment.status)){
+     await pool.query(`INSERT INTO subscription_payments(shop_id,subscription_id,razorpay_payment_id,razorpay_invoice_id,amount_paise,status,failure_reason,paid_at,provider_payload)
+      VALUES($1,$2,$3,$4,$5,$6,$7,CASE WHEN $6='CAPTURED' THEN to_timestamp($8) END,$9::jsonb)
+      ON CONFLICT(razorpay_payment_id) DO UPDATE SET status=EXCLUDED.status,failure_reason=EXCLUDED.failure_reason,paid_at=COALESCE(EXCLUDED.paid_at,subscription_payments.paid_at),provider_payload=EXCLUDED.provider_payload`,
+      [sub.shop_id,sub.id,payment.id,inv.id,Number(payment.amount||inv.amount||0),payment.status==='captured'?'CAPTURED':'FAILED',payment.error_description||null,payment.created_at||null,JSON.stringify(payment)]);
+     paymentCount++;
+    }
+   }
+   const invoiceNumber=String(inv.invoice_number||('RZP-'+inv.id)),invoiceStatus=inv.status==='paid'?'PAID':['cancelled','expired'].includes(inv.status)?'VOID':'ISSUED';
    await pool.query(`INSERT INTO subscription_invoices(shop_id,subscription_id,provider_invoice_id,invoice_number,amount_paise,status,paid_at,receipt_url,invoice_payload)
     VALUES($1,$2,$3,$4,$5,$6,CASE WHEN $6='PAID' THEN to_timestamp($7) END,$8,$9::jsonb)
     ON CONFLICT(provider_invoice_id) DO UPDATE SET status=EXCLUDED.status,paid_at=COALESCE(EXCLUDED.paid_at,subscription_invoices.paid_at),receipt_url=COALESCE(EXCLUDED.receipt_url,subscription_invoices.receipt_url),invoice_payload=EXCLUDED.invoice_payload`,
-    [sub.shop_id,sub.id,inv.id,invoiceNumber,Number(inv.amount||0),inv.status==='paid'?'PAID':'ISSUED',inv.paid_at||null,inv.short_url||null,JSON.stringify(inv)]);
+    [sub.shop_id,sub.id,inv.id,invoiceNumber,Number(inv.amount||0),invoiceStatus,inv.paid_at||null,inv.short_url||null,JSON.stringify(inv)]);
    invoiceCount++;
   }
   s.json({reconciled:true,payments:paymentCount,invoices:invoiceCount});
