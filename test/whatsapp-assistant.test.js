@@ -34,6 +34,15 @@ test('AI receptionist saves the inbound and outbound thread and uses configured 
  assert.ok(pool.statements.some(x=>x.sql.includes("VALUES($1,'INBOUND',$2)")));
 });
 
+test('booking commands are logged but delegated to the existing booking handler',async()=>{
+ const pool=fakePool();
+ const result=await processWhatsAppAssistant(pool,{shopId:4,sender:'919876543210',body:'SERVICES',env:{}});
+ assert.equal(result.skipAI,true);
+ assert.equal(result.conversationId,17);
+ assert.equal(pool.statements.some(x=>x.sql.includes("VALUES($1,'INBOUND',$2)")),true);
+ assert.equal(pool.statements.some(x=>x.sql.includes("VALUES($1,'OUTBOUND'")),false);
+});
+
 test('explicit human request pauses AI and creates a handoff lead',async()=>{
  const pool=fakePool();
  const result=await processWhatsAppAssistant(pool,{shopId:4,sender:'919876543210',body:'Please connect me to a human',env:{}});
