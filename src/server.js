@@ -73,7 +73,7 @@ app.use('/api-docs', (req, res, next) => {
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(openapiSpec));
 
 app.use('/api/auth', createAuthRouter(pool));
-app.use('/api/subscriptions', createSubscriptionRouter(pool, bookingTokens));
+app.use('/api', createSubscriptionRouter(pool, bookingTokens));
 app.use('/api/operator', createOperatorRouter(pool));
 app.use('/api', createBookingRouter(pool, bookingTokens));
 app.use('/api', createDashboardRouter(pool, bookingTokens));
