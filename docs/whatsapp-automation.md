@@ -50,6 +50,7 @@ The AI setting does not enable the WhatsApp channel by itself. The shop must hav
 - Appointment reminders and rebooking messages continue to use the existing message-consent checks and Meta-approved template requirements.
 - A free-form reply from an agent is subject to Meta's customer-service messaging window. If it has closed, use an approved template through the existing template workflow.
 - Ask customers for only the information needed to handle their enquiry. Never request OTPs, passwords or payment-card details in chat.
+- When AI is enabled, the inbound message and limited shop catalogue/policy context are sent to the configured OpenAI-compatible provider to generate a reply. Disclose this processing in the shop's customer privacy notice and enable the feature only after the shop has reviewed its provider/data-processing obligations.
 
 ## Validation and rollout
 
