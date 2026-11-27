@@ -25,8 +25,9 @@ function createAdvancedRouter(pool,tokenService){
    WHERE ss.shop_id=$1 AND (
      ss.status='ACTIVE' OR (ss.status='TRIALING' AND ss.trial_ends_at>NOW())
    ) ORDER BY ss.created_at DESC LIMIT 1`,[shopId]);
-  if(!sub.rowCount)return true; // Preserve legacy access for shops without a subscription record.
-  return sub.rows[0].feature_entitlements?.[feature]===true;
+  if(sub.rowCount)return sub.rows[0].feature_entitlements?.[feature]===true;
+  const any=await pool.query('SELECT 1 FROM shop_subscriptions WHERE shop_id=$1 LIMIT 1',[shopId]);
+  return !any.rowCount; // Preserve legacy access only for shops that predate subscriptions.
  }
  async function barberStaff(user,staffId){const q=await pool.query('SELECT id,shop_id,display_name FROM shop_staff WHERE id=$1 AND user_id=$2 AND is_active=TRUE',[staffId,user.id]);return q.rows[0]||null;}
  async function razorpay(path,method,body){const key=process.env.RAZORPAY_KEY_ID,secret=process.env.RAZORPAY_KEY_SECRET;if(!key||!secret)throw Object.assign(new Error('Razorpay credentials are not configured.'),{status:503});const response=await fetch('https://api.razorpay.com/v1'+path,{method,headers:{Authorization:'Basic '+Buffer.from(key+':'+secret).toString('base64'),'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});const data=await response.json().catch(()=>({}));if(!response.ok)throw Object.assign(new Error(data.error?.description||'Razorpay request failed.'),{status:502});return data;}
@@ -342,7 +343,7 @@ function createAdvancedRouter(pool,tokenService){
    await c.query('BEGIN');
    const shop=await c.query('SELECT id FROM shops WHERE id=$1 AND is_active=TRUE FOR UPDATE',[shopId]);
    if(!shop.rowCount){await c.query('ROLLBACK');return s.status(404).json({error:'Active shop not found.'});}
-   const used=await c.query("SELECT 1 FROM shop_subscriptions WHERE shop_id=$1 AND status='TRIALING' LIMIT 1",[shopId]);
+   const used=await c.query("SELECT 1 FROM shop_subscriptions WHERE shop_id=$1 AND trial_ends_at IS NOT NULL LIMIT 1",[shopId]);
    if(used.rowCount){await c.query('ROLLBACK');return s.status(409).json({error:'This shop has already used its free trial.'});}
    const current=await c.query("SELECT 1 FROM shop_subscriptions WHERE shop_id=$1 AND status IN('CREATED','AUTHENTICATED','ACTIVE','PENDING') LIMIT 1",[shopId]);
    if(current.rowCount){await c.query('ROLLBACK');return s.status(409).json({error:'Shop already has a pending or active paid subscription.'});}
@@ -384,6 +385,7 @@ function createAdvancedRouter(pool,tokenService){
    const saved=await pool.query("UPDATE shop_subscriptions SET status='CANCELLED',cancel_at_period_end=FALSE,cancelled_at=NOW(),updated_at=NOW() WHERE id=$1 RETURNING id,status,cancelled_at",[current.rows[0].id]);
    return s.json({subscription:saved.rows[0],message:'Trial cancelled.'});
   }
+  if(!current.rows[0].razorpay_subscription_id)return s.status(409).json({error:'Provider subscription reference is missing; contact support.'});
   const providerResult=await razorpay('/subscriptions/'+encodeURIComponent(current.rows[0].razorpay_subscription_id)+'/cancel','POST',{cancel_at_cycle_end:cancelAtCycleEnd?1:0});
   const saved=await pool.query(`UPDATE shop_subscriptions SET cancel_at_period_end=$2,cancelled_at=NOW(),provider_payload=provider_payload||$3::jsonb,updated_at=NOW() WHERE id=$1 RETURNING id,status,cancel_at_period_end,cancelled_at,current_end`,[current.rows[0].id,cancelAtCycleEnd,JSON.stringify({cancelResponse:providerResult})]);
   s.json({subscription:saved.rows[0],message:cancelAtCycleEnd?'Cancellation scheduled at current billing period end.':'Subscription cancellation requested immediately.'});
