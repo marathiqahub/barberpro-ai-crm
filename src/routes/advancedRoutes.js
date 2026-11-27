@@ -20,10 +20,14 @@ function createAdvancedRouter(pool,tokenService){
  const safeEqual=(a,b)=>{const x=Buffer.from(String(a||''),'hex'),y=Buffer.from(String(b||''),'hex');return x.length===y.length&&x.length>0&&crypto.timingSafeEqual(x,y);};
  async function shopAccess(user,shopId){if(user.role==='ADMIN')return true;const q=await pool.query('SELECT 1 FROM shop_staff WHERE shop_id=$1 AND user_id=$2 AND is_active=TRUE',[shopId,user.id]);return q.rowCount>0;}
  async function featureEnabled(shopId,feature){
-  const sub=await pool.query(`SELECT p.feature_entitlements FROM shop_subscriptions ss JOIN barberpro_subscription_plans p ON p.id=ss.plan_id
-   WHERE ss.shop_id=$1 AND ss.status='ACTIVE' ORDER BY ss.created_at DESC LIMIT 1`,[shopId]);
-  if(!sub.rowCount)return true; // Existing shops remain in legacy/trial mode until subscription activation.
-  return sub.rows[0].feature_entitlements?.[feature]===true;
+  const sub=await pool.query(`SELECT p.feature_entitlements,ss.status,ss.trial_ends_at
+   FROM shop_subscriptions ss JOIN barberpro_subscription_plans p ON p.id=ss.plan_id
+   WHERE ss.shop_id=$1 AND (
+     ss.status='ACTIVE' AND (ss.current_end IS NULL OR ss.current_end>NOW()) OR (ss.status='TRIALING' AND ss.trial_ends_at>NOW())
+   ) ORDER BY ss.created_at DESC LIMIT 1`,[shopId]);
+  if(sub.rowCount)return sub.rows[0].feature_entitlements?.[feature]===true;
+  const any=await pool.query('SELECT 1 FROM shop_subscriptions WHERE shop_id=$1 LIMIT 1',[shopId]);
+  return !any.rowCount; // Preserve legacy access only for shops that predate subscriptions.
  }
  async function barberStaff(user,staffId){const q=await pool.query('SELECT id,shop_id,display_name FROM shop_staff WHERE id=$1 AND user_id=$2 AND is_active=TRUE',[staffId,user.id]);return q.rows[0]||null;}
  async function razorpay(path,method,body){const key=process.env.RAZORPAY_KEY_ID,secret=process.env.RAZORPAY_KEY_SECRET;if(!key||!secret)throw Object.assign(new Error('Razorpay credentials are not configured.'),{status:503});const response=await fetch('https://api.razorpay.com/v1'+path,{method,headers:{Authorization:'Basic '+Buffer.from(key+':'+secret).toString('base64'),'Content-Type':'application/json'},...(body?{body:JSON.stringify(body)}:{})});const data=await response.json().catch(()=>({}));if(!response.ok)throw Object.assign(new Error(data.error?.description||'Razorpay request failed.'),{status:502});return data;}
@@ -317,54 +321,93 @@ function createAdvancedRouter(pool,tokenService){
   await pool.query('UPDATE user_totp SET secret_encrypted=NULL,pending_secret_encrypted=NULL,enabled=FALSE,last_verified_step=$2,updated_at=NOW() WHERE user_id=$1',[q.user.id,step]);s.json({enabled:false});
  }));
 
- // Plan catalog and Razorpay Subscriptions for BarberPro shop billing.
- r.get('/subscription-plans',authenticate,wrap(async(q,s)=>{const out=await pool.query('SELECT id,code,name,billing_period,amount_paise,feature_entitlements FROM barberpro_subscription_plans WHERE is_active=TRUE ORDER BY amount_paise');s.json({plans:out.rows});}));
+ // SaaS subscription catalogue, trials, Razorpay checkout and cancellation.
+ r.get('/subscription-plans',authenticate,wrap(async(q,s)=>{
+  const out=await pool.query('SELECT id,code,name,billing_period,amount_paise,feature_entitlements FROM barberpro_subscription_plans WHERE is_active=TRUE ORDER BY amount_paise');
+  s.json({plans:out.rows});
+ }));
  r.post('/admin/subscription-plans',...admin,wrap(async(q,s)=>{
   const b=q.body||{},code=String(b.code||'').toLowerCase(),name=String(b.name||'').trim(),period=b.billingPeriod,amount=Number(b.amountPaise),features=b.featureEntitlements||{};
-  if(!features||typeof features!=='object'||Array.isArray(features))return s.status(400).json({error:'featureEntitlements must be a JSON object of boolean feature flags.'});
-  if(Object.values(features).some(value=>typeof value!=='boolean'))return s.status(400).json({error:'Every feature entitlement must be a boolean.'});
+  if(!features||typeof features!=='object'||Array.isArray(features)||Object.values(features).some(value=>typeof value!=='boolean'))return s.status(400).json({error:'featureEntitlements must be a JSON object of boolean feature flags.'});
   if(!/^[a-z0-9_-]{2,40}$/.test(code)||!name||name.length>120||!['MONTHLY','YEARLY'].includes(period)||!Number.isSafeInteger(amount)||amount<100)return s.status(400).json({error:'Provide plan code, name, MONTHLY/YEARLY period and amountPaise.'});
   if((await pool.query('SELECT 1 FROM barberpro_subscription_plans WHERE code=$1',[code])).rowCount)return s.status(409).json({error:'A plan with this code already exists.'});
   const plan=await razorpay('/plans','POST',{period:period==='MONTHLY'?'monthly':'yearly',interval:1,item:{name,amount,currency:'INR',description:'BarberPro '+name}});
-  const saved=await pool.query(`INSERT INTO barberpro_subscription_plans(code,name,billing_period,amount_paise,razorpay_plan_id,feature_entitlements)
-    VALUES($1,$2,$3,$4,$5,$6::jsonb) RETURNING *`,[code,name,period,amount,plan.id,JSON.stringify(features)]);
+  const saved=await pool.query(`INSERT INTO barberpro_subscription_plans(code,name,billing_period,amount_paise,razorpay_plan_id,feature_entitlements) VALUES($1,$2,$3,$4,$5,$6::jsonb) RETURNING *`,[code,name,period,amount,plan.id,JSON.stringify(features)]);
   s.status(201).json({plan:saved.rows[0]});
+ }));
+ r.post('/admin/shops/:shopId/subscription/trial',...admin,wrap(async(q,s)=>{
+  const shopId=id(q.params.shopId),planId=id(q.body?.planId);
+  if(!shopId||!planId)return s.status(400).json({error:'Valid shopId and planId are required.'});
+  const c=await pool.connect();
+  try{
+   await c.query('BEGIN');
+   const shop=await c.query('SELECT id FROM shops WHERE id=$1 AND is_active=TRUE FOR UPDATE',[shopId]);
+   if(!shop.rowCount){await c.query('ROLLBACK');return s.status(404).json({error:'Active shop not found.'});}
+   const used=await c.query("SELECT 1 FROM shop_subscriptions WHERE shop_id=$1 AND trial_ends_at IS NOT NULL LIMIT 1",[shopId]);
+   if(used.rowCount){await c.query('ROLLBACK');return s.status(409).json({error:'This shop has already used its free trial.'});}
+   const current=await c.query("SELECT 1 FROM shop_subscriptions WHERE shop_id=$1 AND status IN('TRIALING','CREATED','AUTHENTICATED','ACTIVE','PENDING') LIMIT 1",[shopId]);
+   if(current.rowCount){await c.query('ROLLBACK');return s.status(409).json({error:'Shop already has a pending or active paid subscription.'});}
+   const plan=await c.query('SELECT id FROM barberpro_subscription_plans WHERE id=$1 AND is_active=TRUE',[planId]);
+   if(!plan.rowCount){await c.query('ROLLBACK');return s.status(404).json({error:'Active subscription plan not found.'});}
+   const trialDays=14;
+   const saved=await c.query(`INSERT INTO shop_subscriptions(shop_id,plan_id,status,trial_ends_at,current_start,current_end,provider_payload,created_by)
+    VALUES($1,$2,'TRIALING',NOW()+($3::text||' days')::interval,NOW(),NOW()+($3::text||' days')::interval,$4::jsonb,$5)
+    RETURNING id,shop_id,status,trial_ends_at,current_start,current_end`,[shopId,planId,trialDays,JSON.stringify({trialDays,startedBy:q.user.id}),q.user.id]);
+   await c.query('COMMIT');return s.status(201).json({subscription:saved.rows[0],trialDays,message:'Trial started. No payment is collected during the trial.'});
+  }catch(e){await c.query('ROLLBACK').catch(()=>{});if(e.code==='23505')return s.status(409).json({error:'A current subscription already exists.'});throw e;}
+  finally{c.release();}
  }));
  r.post('/admin/shops/:shopId/subscription',...admin,wrap(async(q,s)=>{
   const shopId=id(q.params.shopId),planId=id(q.body?.planId);if(!shopId||!planId)return s.status(400).json({error:'Valid shopId and planId are required.'});
   const c=await pool.connect();try{await c.query('BEGIN');
    const shop=await c.query('SELECT id,name FROM shops WHERE id=$1 AND is_active=TRUE FOR UPDATE',[shopId]);
    if(!shop.rowCount){await c.query('ROLLBACK');return s.status(404).json({error:'Active shop not found.'});}
-   const existing=await c.query("SELECT 1 FROM shop_subscriptions WHERE shop_id=$1 AND status IN('CREATED','AUTHENTICATED','ACTIVE','PENDING') LIMIT 1",[shopId]);
+   const existing=await c.query("SELECT 1 FROM shop_subscriptions WHERE shop_id=$1 AND status IN('TRIALING','CREATED','AUTHENTICATED','ACTIVE','PENDING') LIMIT 1",[shopId]);
    if(existing.rowCount){await c.query('ROLLBACK');return s.status(409).json({error:'This shop already has a pending or active subscription.'});}
    const plan=await c.query('SELECT * FROM barberpro_subscription_plans WHERE id=$1 AND is_active=TRUE',[planId]);
    if(!plan.rowCount||!plan.rows[0].razorpay_plan_id){await c.query('ROLLBACK');return s.status(404).json({error:'Configured Razorpay plan not found.'});}
    const sub=await razorpay('/subscriptions','POST',{plan_id:plan.rows[0].razorpay_plan_id,total_count:plan.rows[0].billing_period==='YEARLY'?5:60,quantity:1,customer_notify:0,notes:{shopId:String(shopId),planId:String(planId),shopName:shop.rows[0].name}});
-   const saved=await c.query(`INSERT INTO shop_subscriptions(shop_id,plan_id,razorpay_subscription_id,status,short_url,provider_payload,created_by)
-    VALUES($1,$2,$3,$4,$5,$6::jsonb,$7) RETURNING *`,[shopId,planId,sub.id,sub.status?.toUpperCase()||'CREATED',sub.short_url,JSON.stringify(sub),q.user.id]);
+   const saved=await c.query(`INSERT INTO shop_subscriptions(shop_id,plan_id,razorpay_subscription_id,status,short_url,provider_payload,created_by) VALUES($1,$2,$3,$4,$5,$6::jsonb,$7) RETURNING *`,[shopId,planId,sub.id,sub.status?.toUpperCase()||'CREATED',sub.short_url,JSON.stringify(sub),q.user.id]);
    await c.query('COMMIT');s.status(201).json({subscription:saved.rows[0],checkoutUrl:sub.short_url});
   }catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}
  }));
  r.get('/admin/shops/:shopId/subscription',...admin,wrap(async(q,s)=>{
   const shopId=id(q.params.shopId);if(!shopId)return s.sendStatus(400);
-  const out=await pool.query(`SELECT ss.id,ss.status,ss.current_start,ss.current_end,ss.next_charge_at,ss.short_url,p.code plan_code,p.name plan_name,p.billing_period,p.feature_entitlements
+  const out=await pool.query(`SELECT ss.id,ss.status,ss.current_start,ss.current_end,ss.next_charge_at,ss.trial_ends_at,ss.cancel_at_period_end,ss.short_url,p.code plan_code,p.name plan_name,p.billing_period,p.feature_entitlements
    FROM shop_subscriptions ss JOIN barberpro_subscription_plans p ON p.id=ss.plan_id WHERE ss.shop_id=$1 ORDER BY ss.created_at DESC LIMIT 1`,[shopId]);s.json({subscription:out.rows[0]||null});
+ }));
+ r.patch('/admin/shops/:shopId/subscription/cancel',...admin,wrap(async(q,s)=>{
+  const shopId=id(q.params.shopId),cancelAtCycleEnd=q.body?.cancelAtCycleEnd!==false;
+  if(!shopId)return s.status(400).json({error:'Valid shopId is required.'});
+  const current=await pool.query("SELECT id,razorpay_subscription_id,status FROM shop_subscriptions WHERE shop_id=$1 AND status IN('TRIALING','CREATED','AUTHENTICATED','ACTIVE','PENDING') ORDER BY created_at DESC LIMIT 1",[shopId]);
+  if(!current.rowCount)return s.status(404).json({error:'No cancellable subscription found.'});
+  if(current.rows[0].status==='TRIALING'){
+   const saved=await pool.query("UPDATE shop_subscriptions SET status='CANCELLED',cancel_at_period_end=FALSE,cancelled_at=NOW(),updated_at=NOW() WHERE id=$1 RETURNING id,status,cancelled_at",[current.rows[0].id]);
+   return s.json({subscription:saved.rows[0],message:'Trial cancelled.'});
+  }
+  if(!current.rows[0].razorpay_subscription_id)return s.status(409).json({error:'Provider subscription reference is missing; contact support.'});
+  const providerResult=await razorpay('/subscriptions/'+encodeURIComponent(current.rows[0].razorpay_subscription_id)+'/cancel','POST',{cancel_at_cycle_end:cancelAtCycleEnd?1:0});
+  const saved=await pool.query(`UPDATE shop_subscriptions SET cancel_at_period_end=$2,cancelled_at=NOW(),provider_payload=provider_payload||$3::jsonb,updated_at=NOW() WHERE id=$1 RETURNING id,status,cancel_at_period_end,cancelled_at,current_end`,[current.rows[0].id,cancelAtCycleEnd,JSON.stringify({cancelResponse:providerResult})]);
+  s.json({subscription:saved.rows[0],message:cancelAtCycleEnd?'Cancellation scheduled at current billing period end.':'Subscription cancellation requested immediately.'});
+ }));
+ r.post('/admin/subscriptions/refresh-trials',...admin,wrap(async(q,s)=>{
+  const out=await pool.query("UPDATE shop_subscriptions SET status='EXPIRED',updated_at=NOW() WHERE status='TRIALING' AND trial_ends_at<=NOW() RETURNING id");
+  s.json({expiredTrials:out.rowCount});
  }));
  r.get('/shops/:shopId/feature-entitlements',authenticate,wrap(async(q,s)=>{
   const shopId=id(q.params.shopId);if(!shopId||!await shopAccess(q.user,shopId))return s.sendStatus(404);
-  const out=await pool.query(`SELECT p.feature_entitlements,ss.status FROM shop_subscriptions ss JOIN barberpro_subscription_plans p ON p.id=ss.plan_id
-   WHERE ss.shop_id=$1 AND ss.status='ACTIVE' ORDER BY ss.created_at DESC LIMIT 1`,[shopId]);
+  const out=await pool.query(`SELECT p.feature_entitlements,ss.status,ss.trial_ends_at FROM shop_subscriptions ss JOIN barberpro_subscription_plans p ON p.id=ss.plan_id
+   WHERE ss.shop_id=$1 AND (ss.status='ACTIVE' AND (ss.current_end IS NULL OR ss.current_end>NOW()) OR (ss.status='TRIALING' AND ss.trial_ends_at>NOW())) ORDER BY ss.created_at DESC LIMIT 1`,[shopId]);
   s.json({active:Boolean(out.rowCount),status:out.rows[0]?.status||'UNSUBSCRIBED',features:out.rows[0]?.feature_entitlements||{}});
  }));
  r.post('/subscriptions/webhook',wrap(async(q,s)=>{
   const secret=process.env.RAZORPAY_SUBSCRIPTION_WEBHOOK_SECRET||process.env.RAZORPAY_WEBHOOK_SECRET;if(!secret)return s.status(503).send('Subscription webhook secret is not configured.');
   const sig=q.get('x-razorpay-signature')||'',raw=q.rawBody||Buffer.from(JSON.stringify(q.body||{}));if(!safeEqual(hmac(secret,raw),sig))return s.sendStatus(400);
   const event=q.body||{},entity=event.payload?.subscription?.entity;if(!entity?.id)return s.json({received:true,ignored:true});
-  const map={'subscription.activated':'ACTIVE','subscription.authenticated':'AUTHENTICATED','subscription.pending':'PENDING','subscription.halted':'HALTED','subscription.cancelled':'CANCELLED','subscription.completed':'COMPLETED','subscription.charged':'ACTIVE'};
-  const status=map[event.event];if(status)await pool.query(`UPDATE shop_subscriptions SET status=$2,current_start=to_timestamp(NULLIF($3,0)),current_end=to_timestamp(NULLIF($4,0)),next_charge_at=to_timestamp(NULLIF($5,0)),provider_payload=provider_payload||$6::jsonb,updated_at=NOW() WHERE razorpay_subscription_id=$1`,[entity.id,status,Number(entity.current_start||0),Number(entity.current_end||0),Number(entity.charge_at||0),JSON.stringify({lastWebhook:event.event})]);
+  const map={'subscription.activated':'ACTIVE','subscription.authenticated':'AUTHENTICATED','subscription.pending':'PENDING','subscription.halted':'HALTED','subscription.cancelled':'CANCELLED','subscription.completed':'COMPLETED','subscription.expired':'EXPIRED','subscription.charged':'ACTIVE'};
+  const status=map[event.event];if(status)await pool.query(`UPDATE shop_subscriptions SET status=$2,current_start=to_timestamp(NULLIF($3,0)),current_end=to_timestamp(NULLIF($4,0)),next_charge_at=to_timestamp(NULLIF($5,0)),cancelled_at=CASE WHEN $2 IN('CANCELLED','COMPLETED','EXPIRED') THEN NOW() ELSE cancelled_at END,cancel_at_period_end=CASE WHEN $2 IN('CANCELLED','COMPLETED','EXPIRED','HALTED') THEN FALSE ELSE cancel_at_period_end END,provider_payload=provider_payload||$6::jsonb,updated_at=NOW() WHERE razorpay_subscription_id=$1`,[entity.id,status,Number(entity.current_start||0),Number(entity.current_end||0),Number(entity.charge_at||0),JSON.stringify({lastWebhook:event.event})]);
   s.json({received:true});
  }));
-
  // Admin policy and localized provider templates; a locale fallback is used until its template is approved.
  r.put('/admin/shops/:shopId/reschedule-policy',...admin,wrap(async(q,s)=>{
   const shopId=id(q.params.shopId),hours=Number(q.body?.freeRescheduleBeforeHours);

@@ -224,3 +224,8 @@ The hostname settings are optional. With them unset, the existing public homepag
 6. Update external OAuth/payment/webhook allowlists and Android production URL only after the final hostname is confirmed.
 
 No DNS, domain purchase, Render custom-domain, environment-variable, account, or database changes are performed by this code change.
+
+
+## SaaS subscription model
+
+BarberPro shop subscriptions, Razorpay plan setup, 14-day trials, cancellation, webhook configuration and feature entitlements are documented in [docs/subscription-model.md](docs/subscription-model.md). Migration `033_subscription_trial_lifecycle.sql` adds trial expiry and cancellation state. Existing shops without subscription records retain legacy access during rollout.
