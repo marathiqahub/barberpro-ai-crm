@@ -65,10 +65,9 @@ function createAuthRouter(pool) {
   router.post('/register', registerLimiter, controller.register);
   router.post('/login', loginLimiter, controller.login);
   router.post('/refresh', refreshLimiter, csrfForRefresh, controller.refresh);
-  router.post('/logout', refreshLimiter, csrfForRefresh, controller.logout);
+  router.post('/logout', refreshLimiter, csrfForRefresh, (req,res,next)=>{res.clearCookie('bp_access',{path:'/'});res.clearCookie('bp_refresh',{path:'/'});res.clearCookie('bp_csrf',{path:'/'});controller.logout(req,res,next);});
 
   router.get('/me', authenticate, controller.me);
-  router.post('/logout', refreshLimiter, csrfForRefresh, controller.logout);
 
   return router;
 }
