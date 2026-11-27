@@ -1,7 +1,7 @@
 'use strict';
 
-const COMMAND_RE=/^(?:SERVICES|SLOTS\\s+\\d+\\s+\\d{4}-\\d{2}-\\d{2}|BOOK\\s+\\d+\\s+\\d+\\s+\\S+|CONFIRM\\s+\\d+|CANCEL\\s+\\d+|ACCEPT\\s+\\d+|DECLINE\\s+\\d+|RATE\\s+[1-5]\\s+\\d+)(?:\\s|$)/i;
-const HANDOFF_RE=/\\b(?:human|agent|person|call me|talk to (?:someone|staff)|speak to (?:someone|staff))\\b/i;
+const COMMAND_RE=/^(?:SERVICES|SLOTS\s+\d+\s+\d{4}-\d{2}-\d{2}|BOOK\s+\d+\s+\d+\s+\S+|CONFIRM\s+\d+|CANCEL\s+\d+|ACCEPT\s+\d+|DECLINE\s+\d+|RATE\s+[1-5]\s+\d+)(?:\s|$)/i;
+const HANDOFF_RE=/\b(?:human|agent|person|call me|talk to (?:someone|staff)|speak to (?:someone|staff))\b/i;
 function safeText(value,max=500){return typeof value==='string'?value.trim().slice(0,max):'';}
 async function processWhatsAppAssistant(pool,{shopId,sender,body,customerId=null,env=process.env,fetchImpl=global.fetch}){
  const text=safeText(body,500);if(!text||COMMAND_RE.test(text))return null;
@@ -45,7 +45,7 @@ async function processWhatsAppAssistant(pool,{shopId,sender,body,customerId=null
   reply=(settings.whatsapp_ai_greeting||('Hello! Welcome to '+settings.name+'. I can help with services, prices and bookings. Reply SERVICES to see services, then SLOTS <service-id> <YYYY-MM-DD> to check availability.')).slice(0,1000);
  }else{
   try{
-   const base=(env.OPENAI_BASE_URL||'https://api.openai.com/v1').replace(/\\/+$/,'');
+   const base=(env.OPENAI_BASE_URL||'https://api.openai.com/v1').replace(/\/+$/,'');
    const response=await fetchImpl(base+'/chat/completions',{method:'POST',headers:{Authorization:'Bearer '+env.OPENAI_API_KEY,'Content-Type':'application/json'},signal:AbortSignal.timeout(12000),body:JSON.stringify({
     model:env.OPENAI_MODEL||'gpt-4o-mini',temperature:0.2,max_tokens:220,
     messages:[
