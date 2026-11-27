@@ -6,6 +6,10 @@ const {offerWaitlistEntry}=require('../src/routes/retentionRoutes');
 const {queueRebookingNudges}=require('../src/messaging/rebooking');
 const pool=new Pool({connectionString:process.env.DATABASE_URL,max:2});
 async function purgeExpiredReferencePhotos(){ await pool.query('DELETE FROM shop_appointment_reference_photos WHERE retention_until<=NOW()'); }
+async function purgeExpiredWhatsAppConversations(){
+ await pool.query(`DELETE FROM shop_whatsapp_conversation_messages m USING shop_whatsapp_conversations c WHERE m.conversation_id=c.id AND c.status<>'HUMAN' AND m.expires_at<=NOW()`);
+ await pool.query(`DELETE FROM shop_whatsapp_conversations WHERE status<>'HUMAN' AND expires_at<=NOW()`);
+}
 async function refillExpiredWaitlistOffers(){
  const expired=await pool.query(`UPDATE shop_waitlist_entries SET status='EXPIRED',updated_at=NOW()
   WHERE status='OFFERED' AND offer_expires_at<=NOW() RETURNING shop_id,offered_from_appointment_id`);
@@ -51,6 +55,7 @@ async function queueRebookingAndReviewNudges(){
 async function run(){
  if(!process.env.DATABASE_URL)throw new Error('DATABASE_URL is required');
  await purgeExpiredReferencePhotos();
+ await purgeExpiredWhatsAppConversations();
  await refillExpiredWaitlistOffers();
  await queueMissingAppointmentReminders();
  await queueRebookingAndReviewNudges();
