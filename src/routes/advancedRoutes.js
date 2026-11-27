@@ -23,7 +23,7 @@ function createAdvancedRouter(pool,tokenService){
   const sub=await pool.query(`SELECT p.feature_entitlements,ss.status,ss.trial_ends_at
    FROM shop_subscriptions ss JOIN barberpro_subscription_plans p ON p.id=ss.plan_id
    WHERE ss.shop_id=$1 AND (
-     ss.status='ACTIVE' OR (ss.status='TRIALING' AND ss.trial_ends_at>NOW())
+     ss.status='ACTIVE' AND (ss.current_end IS NULL OR ss.current_end>NOW()) OR (ss.status='TRIALING' AND ss.trial_ends_at>NOW())
    ) ORDER BY ss.created_at DESC LIMIT 1`,[shopId]);
   if(sub.rowCount)return sub.rows[0].feature_entitlements?.[feature]===true;
   const any=await pool.query('SELECT 1 FROM shop_subscriptions WHERE shop_id=$1 LIMIT 1',[shopId]);
@@ -397,7 +397,7 @@ function createAdvancedRouter(pool,tokenService){
  r.get('/shops/:shopId/feature-entitlements',authenticate,wrap(async(q,s)=>{
   const shopId=id(q.params.shopId);if(!shopId||!await shopAccess(q.user,shopId))return s.sendStatus(404);
   const out=await pool.query(`SELECT p.feature_entitlements,ss.status,ss.trial_ends_at FROM shop_subscriptions ss JOIN barberpro_subscription_plans p ON p.id=ss.plan_id
-   WHERE ss.shop_id=$1 AND (ss.status='ACTIVE' OR (ss.status='TRIALING' AND ss.trial_ends_at>NOW())) ORDER BY ss.created_at DESC LIMIT 1`,[shopId]);
+   WHERE ss.shop_id=$1 AND (ss.status='ACTIVE' AND (ss.current_end IS NULL OR ss.current_end>NOW()) OR (ss.status='TRIALING' AND ss.trial_ends_at>NOW())) ORDER BY ss.created_at DESC LIMIT 1`,[shopId]);
   s.json({active:Boolean(out.rowCount),status:out.rows[0]?.status||'UNSUBSCRIBED',features:out.rows[0]?.feature_entitlements||{}});
  }));
  r.post('/subscriptions/webhook',wrap(async(q,s)=>{
@@ -405,7 +405,7 @@ function createAdvancedRouter(pool,tokenService){
   const sig=q.get('x-razorpay-signature')||'',raw=q.rawBody||Buffer.from(JSON.stringify(q.body||{}));if(!safeEqual(hmac(secret,raw),sig))return s.sendStatus(400);
   const event=q.body||{},entity=event.payload?.subscription?.entity;if(!entity?.id)return s.json({received:true,ignored:true});
   const map={'subscription.activated':'ACTIVE','subscription.authenticated':'AUTHENTICATED','subscription.pending':'PENDING','subscription.halted':'HALTED','subscription.cancelled':'CANCELLED','subscription.completed':'COMPLETED','subscription.expired':'EXPIRED','subscription.charged':'ACTIVE'};
-  const status=map[event.event];if(status)await pool.query(`UPDATE shop_subscriptions SET status=$2,current_start=to_timestamp(NULLIF($3,0)),current_end=to_timestamp(NULLIF($4,0)),next_charge_at=to_timestamp(NULLIF($5,0)),provider_payload=provider_payload||$6::jsonb,updated_at=NOW() WHERE razorpay_subscription_id=$1`,[entity.id,status,Number(entity.current_start||0),Number(entity.current_end||0),Number(entity.charge_at||0),JSON.stringify({lastWebhook:event.event})]);
+  const status=map[event.event];if(status)await pool.query(`UPDATE shop_subscriptions SET status=$2,current_start=to_timestamp(NULLIF($3,0)),current_end=to_timestamp(NULLIF($4,0)),next_charge_at=to_timestamp(NULLIF($5,0)),cancelled_at=CASE WHEN $2 IN('CANCELLED','COMPLETED','EXPIRED') THEN NOW() ELSE cancelled_at END,cancel_at_period_end=CASE WHEN $2 IN('CANCELLED','COMPLETED','EXPIRED','HALTED') THEN FALSE ELSE cancel_at_period_end END,provider_payload=provider_payload||$6::jsonb,updated_at=NOW() WHERE razorpay_subscription_id=$1`,[entity.id,status,Number(entity.current_start||0),Number(entity.current_end||0),Number(entity.charge_at||0),JSON.stringify({lastWebhook:event.event})]);
   s.json({received:true});
  }));
  // Admin policy and localized provider templates; a locale fallback is used until its template is approved.
