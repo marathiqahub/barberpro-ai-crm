@@ -54,6 +54,8 @@ async function queueRebookingAndReviewNudges(){
 }
 async function run(){
  if(!process.env.DATABASE_URL)throw new Error('DATABASE_URL is required');
+ const expiredTrials=await expireSubscriptionTrials();
+ if(expiredTrials)console.log('Expired subscription trials:',expiredTrials);
  await purgeExpiredReferencePhotos();
  await purgeExpiredWhatsAppConversations();
  await refillExpiredWaitlistOffers();

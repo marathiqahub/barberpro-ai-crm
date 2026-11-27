@@ -8,6 +8,7 @@ const {createAuthMiddleware}=require('../auth/middleware');
 const {generateSecret,encryptSecret,decryptSecret,matchingTotpStep,verifyTotp,otpauthUri}=require('../advanced/totp');
 const {toCsv,parseCsv}=require('../advanced/csv');
 const {scheduleAppointmentReminders}=require('../messaging/reminders');
+const {verifyRazorpayWebhook,normalizeSubscriptionWebhook}=require('../subscriptions/webhook');
 
 function createAdvancedRouter(pool,tokenService){
  const r=express.Router(),{authenticate,requireRole}=createAuthMiddleware(pool,tokenService);
@@ -401,12 +402,35 @@ function createAdvancedRouter(pool,tokenService){
   s.json({active:Boolean(out.rowCount),status:out.rows[0]?.status||'UNSUBSCRIBED',features:out.rows[0]?.feature_entitlements||{}});
  }));
  r.post('/subscriptions/webhook',wrap(async(q,s)=>{
-  const secret=process.env.RAZORPAY_SUBSCRIPTION_WEBHOOK_SECRET||process.env.RAZORPAY_WEBHOOK_SECRET;if(!secret)return s.status(503).send('Subscription webhook secret is not configured.');
-  const sig=q.get('x-razorpay-signature')||'',raw=q.rawBody||Buffer.from(JSON.stringify(q.body||{}));if(!safeEqual(hmac(secret,raw),sig))return s.sendStatus(400);
-  const event=q.body||{},entity=event.payload?.subscription?.entity;if(!entity?.id)return s.json({received:true,ignored:true});
-  const map={'subscription.activated':'ACTIVE','subscription.authenticated':'AUTHENTICATED','subscription.pending':'PENDING','subscription.halted':'HALTED','subscription.cancelled':'CANCELLED','subscription.completed':'COMPLETED','subscription.expired':'EXPIRED','subscription.charged':'ACTIVE'};
-  const status=map[event.event];if(status)await pool.query(`UPDATE shop_subscriptions SET status=$2,current_start=to_timestamp(NULLIF($3,0)),current_end=to_timestamp(NULLIF($4,0)),next_charge_at=to_timestamp(NULLIF($5,0)),cancelled_at=CASE WHEN $2 IN('CANCELLED','COMPLETED','EXPIRED') THEN NOW() ELSE cancelled_at END,cancel_at_period_end=CASE WHEN $2 IN('CANCELLED','COMPLETED','EXPIRED','HALTED') THEN FALSE ELSE cancel_at_period_end END,provider_payload=provider_payload||$6::jsonb,updated_at=NOW() WHERE razorpay_subscription_id=$1`,[entity.id,status,Number(entity.current_start||0),Number(entity.current_end||0),Number(entity.charge_at||0),JSON.stringify({lastWebhook:event.event})]);
-  s.json({received:true});
+  const secret=process.env.RAZORPAY_SUBSCRIPTION_WEBHOOK_SECRET||process.env.RAZORPAY_WEBHOOK_SECRET;
+  if(!secret)return s.status(503).send('Subscription webhook secret is not configured.');
+  const raw=q.rawBody;
+  if(!verifyRazorpayWebhook(secret,raw,q.get('x-razorpay-signature')||''))return s.sendStatus(400);
+  const normalized=normalizeSubscriptionWebhook(q.body,raw),entity=normalized.entity,c=await pool.connect();
+  try{
+   await c.query('BEGIN');
+   const received=await c.query(`INSERT INTO shop_subscription_webhook_events(event_id,event_type,razorpay_subscription_id,provider_created_at,payload)
+    VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT(event_id) DO NOTHING RETURNING event_id`,
+    [normalized.eventId,normalized.eventType,normalized.subscriptionId,normalized.providerCreatedAt,JSON.stringify({id:normalized.eventId,event:normalized.eventType,created_at:q.body?.created_at||null})]);
+   if(!received.rowCount){await c.query('COMMIT');return s.json({received:true,duplicate:true});}
+   let applied=false;
+   if(normalized.status&&entity?.id){
+    const updated=await c.query(`UPDATE shop_subscriptions SET status=$2,
+      current_start=COALESCE(to_timestamp(NULLIF($3,0)),current_start),current_end=COALESCE(to_timestamp(NULLIF($4,0)),current_end),
+      next_charge_at=COALESCE(to_timestamp(NULLIF($5,0)),next_charge_at),
+      cancelled_at=CASE WHEN $2 IN('CANCELLED','COMPLETED','EXPIRED') THEN NOW() ELSE cancelled_at END,
+      cancel_at_period_end=CASE WHEN $2 IN('CANCELLED','COMPLETED','EXPIRED','HALTED') THEN FALSE ELSE cancel_at_period_end END,
+      provider_payload=provider_payload||$6::jsonb,last_webhook_created_at=COALESCE($7::timestamptz,NOW()),updated_at=NOW()
+     WHERE razorpay_subscription_id=$1
+       AND (last_webhook_created_at IS NULL OR last_webhook_created_at<=COALESCE($7::timestamptz,NOW()))
+     RETURNING id`,
+     [entity.id,normalized.status,Number(entity.current_start||0),Number(entity.current_end||0),Number(entity.charge_at||0),
+      JSON.stringify({lastWebhook:normalized.eventType,lastWebhookEventId:normalized.eventId}),normalized.providerCreatedAt]);
+    applied=updated.rowCount>0;
+   }
+   await c.query('COMMIT');
+   s.json({received:true,applied,ignored:!normalized.status||!entity?.id});
+  }catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}
  }));
  // Admin policy and localized provider templates; a locale fallback is used until its template is approved.
  r.put('/admin/shops/:shopId/reschedule-policy',...admin,wrap(async(q,s)=>{
