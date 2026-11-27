@@ -135,6 +135,8 @@ function createSubscriptionRouter(pool,tokenService,options={}) {
    await c.query('COMMIT');s.json({received:true,processed:Boolean(found.rowCount)});
   }catch(e){await c.query('ROLLBACK');throw e;}finally{c.release();}
  }));
+ r.post('/admin/shops/:shopId/billing-members',...admin,wrap(async(q,s)=>{const shopId=validId(q.params.shopId),userId=validId(q.body?.userId),role=q.body?.role;if(!shopId||!userId||!['SHOP_OWNER','BILLING_ADMIN'].includes(role))return s.status(400).json({error:'Valid shopId, userId and role are required.'});const out=await pool.query('INSERT INTO shop_billing_members(shop_id,user_id,role,created_by) VALUES($1,$2,$3,$4) ON CONFLICT(shop_id,user_id) DO UPDATE SET role=EXCLUDED.role RETURNING id,shop_id,user_id,role',[shopId,userId,role,q.user.id]);s.status(201).json({member:out.rows[0]});}));
+ r.delete('/admin/shops/:shopId/billing-members/:userId',...admin,wrap(async(q,s)=>{const shopId=validId(q.params.shopId),userId=validId(q.params.userId);if(!shopId||!userId)return s.status(400).json({error:'Invalid ids.'});const out=await pool.query('DELETE FROM shop_billing_members WHERE shop_id=$1 AND user_id=$2 RETURNING id',[shopId,userId]);s.json({removed:Boolean(out.rowCount)});}));
  return r;
 }
 module.exports={createSubscriptionRouter};
