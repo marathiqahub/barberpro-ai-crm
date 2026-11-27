@@ -411,7 +411,7 @@ function createAdvancedRouter(pool,tokenService){
    await c.query('BEGIN');
    const received=await c.query(`INSERT INTO shop_subscription_webhook_events(event_id,event_type,razorpay_subscription_id,provider_created_at,payload)
     VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT(event_id) DO NOTHING RETURNING event_id`,
-    [normalized.eventId,normalized.eventType,normalized.subscriptionId,normalized.providerCreatedAt,JSON.stringify(q.body||{})]);
+    [normalized.eventId,normalized.eventType,normalized.subscriptionId,normalized.providerCreatedAt,JSON.stringify({id:normalized.eventId,event:normalized.eventType,created_at:q.body?.created_at||null})]);
    if(!received.rowCount){await c.query('COMMIT');return s.json({received:true,duplicate:true});}
    let applied=false;
    if(normalized.status&&entity?.id){
