@@ -345,7 +345,7 @@ function createAdvancedRouter(pool,tokenService){
    if(!shop.rowCount){await c.query('ROLLBACK');return s.status(404).json({error:'Active shop not found.'});}
    const used=await c.query("SELECT 1 FROM shop_subscriptions WHERE shop_id=$1 AND trial_ends_at IS NOT NULL LIMIT 1",[shopId]);
    if(used.rowCount){await c.query('ROLLBACK');return s.status(409).json({error:'This shop has already used its free trial.'});}
-   const current=await c.query("SELECT 1 FROM shop_subscriptions WHERE shop_id=$1 AND status IN('CREATED','AUTHENTICATED','ACTIVE','PENDING') LIMIT 1",[shopId]);
+   const current=await c.query("SELECT 1 FROM shop_subscriptions WHERE shop_id=$1 AND status IN('TRIALING','CREATED','AUTHENTICATED','ACTIVE','PENDING') LIMIT 1",[shopId]);
    if(current.rowCount){await c.query('ROLLBACK');return s.status(409).json({error:'Shop already has a pending or active paid subscription.'});}
    const plan=await c.query('SELECT id FROM barberpro_subscription_plans WHERE id=$1 AND is_active=TRUE',[planId]);
    if(!plan.rowCount){await c.query('ROLLBACK');return s.status(404).json({error:'Active subscription plan not found.'});}
@@ -362,7 +362,7 @@ function createAdvancedRouter(pool,tokenService){
   const c=await pool.connect();try{await c.query('BEGIN');
    const shop=await c.query('SELECT id,name FROM shops WHERE id=$1 AND is_active=TRUE FOR UPDATE',[shopId]);
    if(!shop.rowCount){await c.query('ROLLBACK');return s.status(404).json({error:'Active shop not found.'});}
-   const existing=await c.query("SELECT 1 FROM shop_subscriptions WHERE shop_id=$1 AND status IN('CREATED','AUTHENTICATED','ACTIVE','PENDING') LIMIT 1",[shopId]);
+   const existing=await c.query("SELECT 1 FROM shop_subscriptions WHERE shop_id=$1 AND status IN('TRIALING','CREATED','AUTHENTICATED','ACTIVE','PENDING') LIMIT 1",[shopId]);
    if(existing.rowCount){await c.query('ROLLBACK');return s.status(409).json({error:'This shop already has a pending or active subscription.'});}
    const plan=await c.query('SELECT * FROM barberpro_subscription_plans WHERE id=$1 AND is_active=TRUE',[planId]);
    if(!plan.rowCount||!plan.rows[0].razorpay_plan_id){await c.query('ROLLBACK');return s.status(404).json({error:'Configured Razorpay plan not found.'});}
@@ -404,7 +404,7 @@ function createAdvancedRouter(pool,tokenService){
   const secret=process.env.RAZORPAY_SUBSCRIPTION_WEBHOOK_SECRET||process.env.RAZORPAY_WEBHOOK_SECRET;if(!secret)return s.status(503).send('Subscription webhook secret is not configured.');
   const sig=q.get('x-razorpay-signature')||'',raw=q.rawBody||Buffer.from(JSON.stringify(q.body||{}));if(!safeEqual(hmac(secret,raw),sig))return s.sendStatus(400);
   const event=q.body||{},entity=event.payload?.subscription?.entity;if(!entity?.id)return s.json({received:true,ignored:true});
-  const map={'subscription.activated':'ACTIVE','subscription.authenticated':'AUTHENTICATED','subscription.pending':'PENDING','subscription.halted':'HALTED','subscription.cancelled':'CANCELLED','subscription.completed':'COMPLETED','subscription.charged':'ACTIVE'};
+  const map={'subscription.activated':'ACTIVE','subscription.authenticated':'AUTHENTICATED','subscription.pending':'PENDING','subscription.halted':'HALTED','subscription.cancelled':'CANCELLED','subscription.completed':'COMPLETED','subscription.expired':'EXPIRED','subscription.charged':'ACTIVE'};
   const status=map[event.event];if(status)await pool.query(`UPDATE shop_subscriptions SET status=$2,current_start=to_timestamp(NULLIF($3,0)),current_end=to_timestamp(NULLIF($4,0)),next_charge_at=to_timestamp(NULLIF($5,0)),provider_payload=provider_payload||$6::jsonb,updated_at=NOW() WHERE razorpay_subscription_id=$1`,[entity.id,status,Number(entity.current_start||0),Number(entity.current_end||0),Number(entity.charge_at||0),JSON.stringify({lastWebhook:event.event})]);
   s.json({received:true});
  }));
