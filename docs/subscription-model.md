@@ -35,7 +35,7 @@ The amount is in paise: ₹499 = 49900. Create separate monthly and yearly plan 
 - `GET /api/admin/shops/:shopId/subscription` — inspect current/latest status and feature entitlements.
 - `PATCH /api/admin/shops/:shopId/subscription/cancel` — cancel trial immediately, or paid subscription at period end by default. Send `{"cancelAtCycleEnd": false}` to request immediate cancellation from Razorpay.
 - `GET /api/shops/:shopId/feature-entitlements` — shop-accessible feature flags.
-- `POST /api/admin/subscriptions/refresh-trials` — manually mark elapsed trials EXPIRED. The existing scheduled `reminders:deliver` worker also expires elapsed trials automatically on its configured schedule.
+- `POST /api/admin/subscriptions/refresh-trials` — manually mark elapsed trials EXPIRED. The `reminders:deliver` worker now expires elapsed trials when it runs. The Render Blueprint declares a Starter Cron service, but that service must actually be provisioned in the Render dashboard before automatic expiry is operational; otherwise use the admin refresh endpoint.
 
 The Admin workspace provides plan creation, trial start, paid checkout-link creation, current subscription status and cancellation controls. The shop remains gated by verified provider status; creating a checkout link does not grant paid access.
 
