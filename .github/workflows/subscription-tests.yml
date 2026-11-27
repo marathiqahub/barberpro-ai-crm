@@ -32,6 +32,8 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      - name: Run JavaScript syntax checks
+        run: npm run check
       - name: Apply schema to disposable PostgreSQL
         env:
           DATABASE_URL: postgres://barberpro:test-password@localhost:5432/barberpro_test
