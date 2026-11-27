@@ -41,7 +41,7 @@ async function processWhatsAppAssistant(pool,{shopId,sender,body,customerId=null
  ]);
  const historyMessages=history.rows.reverse().slice(0,-1).map(x=>({role:x.direction==='INBOUND'?'user':'assistant',content:x.body}));
  const context={shop:settings.name,services:services.rows.map(x=>({name:x.name,price_inr:Number(x.price),duration_minutes:x.duration_minutes})),barbers:staff.rows.map(x=>x.display_name),bookingPolicy:policy.rows[0]||{}};
- let reply;
+ let reply,aiGenerated=false;
  if(!env.OPENAI_API_KEY){
   reply=(settings.whatsapp_ai_greeting||('Hello! Welcome to '+settings.name+'. I can help with services, prices and bookings. Reply SERVICES to see services, then SLOTS <service-id> <YYYY-MM-DD> to check availability.')).slice(0,1000);
  }else{
@@ -59,12 +59,13 @@ async function processWhatsAppAssistant(pool,{shopId,sender,body,customerId=null
    if(!response.ok)throw new Error('AI provider unavailable');
    const payload=await response.json();reply=safeText(payload.choices?.[0]?.message?.content,1000);
    if(!reply)throw new Error('AI response empty');
+   aiGenerated=true;
   }catch(error){
    reply='I can help with services and bookings. Reply SERVICES to see the current service list, or type HUMAN to speak with the shop team.';
   }
  }
  const savedReply=await pool.query(`INSERT INTO shop_whatsapp_conversation_messages(conversation_id,direction,body,ai_generated)
-  VALUES($1,'OUTBOUND',$2,TRUE) RETURNING id`,[convId,reply]);
+  VALUES($1,'OUTBOUND',$2,$3) RETURNING id`,[convId,reply,aiGenerated]);
  await pool.query(`UPDATE shop_whatsapp_conversations SET last_message_at=NOW(),updated_at=NOW(),expires_at=NOW()+INTERVAL '180 days' WHERE id=$1`,[convId]);
  return {body:reply,conversationId:convId,outboundMessageId:savedReply.rows[0].id,handedOff:false};
 }
