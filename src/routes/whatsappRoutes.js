@@ -4,6 +4,7 @@ const crypto=require('node:crypto');
 const {deliver}=require('../messaging/delivery');
 const {scheduleAppointmentReminders}=require('../messaging/reminders');
 const {offerWaitlistEntry}=require('./retentionRoutes');
+const {processWhatsAppAssistant}=require('../messaging/whatsapp-assistant');
 function createWhatsAppRouter(pool,options={}){
  const r=express.Router(),env=options.env||process.env,fetchImpl=options.fetchImpl||global.fetch;
  r.get('/webhooks/whatsapp',(q,s)=>{const mode=q.query['hub.mode'],token=q.query['hub.verify_token'],challenge=q.query['hub.challenge'];if(mode==='subscribe'&&token&&token===env.META_WHATSAPP_VERIFY_TOKEN)return s.status(200).send(challenge);return s.sendStatus(403)});
@@ -84,7 +85,12 @@ function createWhatsAppRouter(pool,options={}){
     if(!m||!user.rowCount)reply='To request a booking, first sign in to your BarberPro customer account and add your phone number. Then send BOOK <service-id> <staff-id> <ISO date/time>.';
     else{const start=new Date(m[3]);if(Number.isNaN(start.getTime()))reply='Please send a valid ISO date/time including timezone.';else{const booked=await pool.query(`INSERT INTO appointments(shop_id,staff_id,service_id,customer_id,starts_at,ends_at,status) SELECT sh.id,st.id,sv.id,$4,$5,$5+make_interval(mins=>sv.duration_minutes),'BOOKED' FROM shops sh JOIN shop_staff st ON st.shop_id=sh.id JOIN services sv ON sv.shop_id=sh.id WHERE sh.id=$1 AND st.id=$2 AND st.is_active=TRUE AND sv.id=$3 AND sv.is_active=TRUE AND $5>NOW() AND EXTRACT(MINUTE FROM ($5 AT TIME ZONE sh.timezone))::int % 15=0 AND EXTRACT(SECOND FROM ($5 AT TIME ZONE sh.timezone))=0 AND (NOT EXISTS(SELECT 1 FROM staff_services ss WHERE ss.staff_id=st.id) OR EXISTS(SELECT 1 FROM staff_services ss WHERE ss.staff_id=st.id AND ss.service_id=sv.id)) AND EXISTS(SELECT 1 FROM staff_working_hours wh WHERE wh.staff_id=st.id AND wh.day_of_week=EXTRACT(DOW FROM ($5 AT TIME ZONE sh.timezone))::int AND wh.is_active=TRUE AND ($5 AT TIME ZONE sh.timezone)::time>=wh.opens_at AND (($5 AT TIME ZONE sh.timezone)::time+make_interval(mins=>sv.duration_minutes))<=wh.closes_at) AND NOT EXISTS(SELECT 1 FROM staff_time_off t WHERE t.staff_id=st.id AND tstzrange(t.starts_at,t.ends_at,'[)')&&tstzrange($5,$5+make_interval(mins=>sv.duration_minutes),'[)')) RETURNING id,starts_at`,[shopId,Number(m[2]),Number(m[1]),user.rows[0].id,start.toISOString()]);if(booked.rowCount)await scheduleAppointmentReminders(pool,{id:booked.rows[0].id,shop_id:shopId,customer_id:user.rows[0].id,starts_at:booked.rows[0].starts_at});reply=booked.rowCount?'Booking request #'+booked.rows[0].id+' created for '+booked.rows[0].starts_at+'. The shop will confirm it.':'That barber/service is unavailable. Reply SERVICES or book in the app.'}}
    }
-   await deliver('WHATSAPP',msg.from,{body:reply},env,fetchImpl,{provider:'META',phoneNumberId:phoneId,allowFreeform:true});
+   const assistant=await processWhatsAppAssistant(pool,{shopId,sender:msg.from,body,customerId:user.rows[0]?.id||null,env,fetchImpl});
+   if(assistant?.suppressReply){await pool.query('UPDATE shop_whatsapp_inbound_messages SET processed_at=NOW() WHERE id=$1',[saved.rows[0].id]);continue;}
+   if(assistant?.body)reply=assistant.body;
+   const delivery=await deliver('WHATSAPP',msg.from,{body:reply},env,fetchImpl,{provider:'META',phoneNumberId:phoneId,allowFreeform:true});
+   if(assistant?.outboundMessageId)await pool.query('UPDATE shop_whatsapp_conversation_messages SET delivery_status=$2,provider_message_id=$3 WHERE id=$1',[assistant.outboundMessageId,delivery?.reference?'SENT':'FAILED',delivery?.reference||null]);
+   else if(assistant?.conversationId&&assistant.skipAI)await pool.query("INSERT INTO shop_whatsapp_conversation_messages(conversation_id,direction,body,ai_generated,provider_message_id,delivery_status) VALUES($1,'OUTBOUND',$2,FALSE,$3,'SENT')",[assistant.conversationId,reply,delivery?.reference||null]);
    await pool.query('UPDATE shop_whatsapp_inbound_messages SET processed_at=NOW() WHERE id=$1',[saved.rows[0].id]);
   }}
   s.sendStatus(200);

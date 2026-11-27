@@ -6,10 +6,9 @@ const {offerWaitlistEntry}=require('../src/routes/retentionRoutes');
 const {queueRebookingNudges}=require('../src/messaging/rebooking');
 const pool=new Pool({connectionString:process.env.DATABASE_URL,max:2});
 async function purgeExpiredReferencePhotos(){ await pool.query('DELETE FROM shop_appointment_reference_photos WHERE retention_until<=NOW()'); }
-async function expireSubscriptionTrials(){
- const result=await pool.query(`UPDATE shop_subscriptions SET status='EXPIRED',updated_at=NOW()
-  WHERE status='TRIALING' AND trial_ends_at IS NOT NULL AND trial_ends_at<=NOW() RETURNING id`);
- return result.rowCount;
+async function purgeExpiredWhatsAppConversations(){
+ await pool.query(`DELETE FROM shop_whatsapp_conversation_messages m USING shop_whatsapp_conversations c WHERE m.conversation_id=c.id AND c.status<>'HUMAN' AND m.expires_at<=NOW()`);
+ await pool.query(`DELETE FROM shop_whatsapp_conversations WHERE status<>'HUMAN' AND expires_at<=NOW()`);
 }
 async function refillExpiredWaitlistOffers(){
  const expired=await pool.query(`UPDATE shop_waitlist_entries SET status='EXPIRED',updated_at=NOW()
@@ -58,6 +57,7 @@ async function run(){
  const expiredTrials=await expireSubscriptionTrials();
  if(expiredTrials)console.log('Expired subscription trials:',expiredTrials);
  await purgeExpiredReferencePhotos();
+ await purgeExpiredWhatsAppConversations();
  await refillExpiredWaitlistOffers();
  await queueMissingAppointmentReminders();
  await queueRebookingAndReviewNudges();
