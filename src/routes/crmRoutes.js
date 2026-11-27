@@ -31,7 +31,7 @@ function createCrmRouter(pool, tokenService) {
        LEFT JOIN appointments a ON a.customer_id=u.id AND a.shop_id=$1
        LEFT JOIN shop_customer_profiles cp ON cp.shop_id=$1 AND cp.customer_id=u.id
        LEFT JOIN shop_loyalty_accounts la ON la.shop_id=$1 AND la.customer_id=u.id
-       WHERE u.role='CUSTOMER' AND (a.id IS NOT NULL OR cp.customer_id IS NOT NULL) AND ($2='' OR u.name ILIKE '%'||$2||'%' OR u.email ILIKE '%'||$2||'%')
+       WHERE u.role='CUSTOMER' AND (a.id IS NOT NULL OR cp.customer_id IS NOT NULL) AND ($2='' OR u.name ILIKE '%'||$2||'%' OR u.email ILIKE '%'||$2||'%' OR u.phone ILIKE '%'||$2||'%')
        GROUP BY u.id,u.name,u.email,la.balance_points,cp.marketing_email_consent,cp.marketing_sms_consent,cp.notes
        ORDER BY last_visit DESC NULLS LAST,u.name LIMIT 500`,[shopId,search]);
     res.json({shopId,customers:result.rows});
