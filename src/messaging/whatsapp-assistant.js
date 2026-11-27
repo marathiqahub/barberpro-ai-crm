@@ -4,7 +4,7 @@ const COMMAND_RE=/^(?:SERVICES|SLOTS\s+\d+\s+\d{4}-\d{2}-\d{2}|BOOK\s+\d+\s+\d+\
 const HANDOFF_RE=/\b(?:human|agent|person|call me|talk to (?:someone|staff)|speak to (?:someone|staff))\b/i;
 function safeText(value,max=500){return typeof value==='string'?value.trim().slice(0,max):'';}
 async function processWhatsAppAssistant(pool,{shopId,sender,body,customerId=null,env=process.env,fetchImpl=global.fetch}){
- const text=safeText(body,500);if(!text||COMMAND_RE.test(text))return null;
+ const text=safeText(body,500);if(!text)return null;
  const config=await pool.query(`SELECT m.whatsapp_ai_enabled,m.whatsapp_ai_locale,m.whatsapp_ai_greeting,m.whatsapp_handoff_keywords,s.name
   FROM shop_messaging_settings m JOIN shops s ON s.id=m.shop_id
   WHERE m.shop_id=$1 AND s.is_active=TRUE AND 'WHATSAPP'=ANY(m.enabled_channels)`,[shopId]);
@@ -17,7 +17,8 @@ async function processWhatsAppAssistant(pool,{shopId,sender,body,customerId=null
   VALUES($1,'INBOUND',$2)`,[convId,text]);
  if(!customerId)await pool.query(`INSERT INTO shop_whatsapp_leads(shop_id,conversation_id,sender,interest)
   VALUES($1,$2,$3,$4) ON CONFLICT(shop_id,sender) DO UPDATE SET conversation_id=EXCLUDED.conversation_id,interest=LEFT(COALESCE(shop_whatsapp_leads.interest,'')||' '||EXCLUDED.interest,500),updated_at=NOW()`,[shopId,convId,sender,text]);
- if(thread.status==='HUMAN')return null;
+ if(thread.status==='HUMAN')return {conversationId:convId,suppressReply:true};
+ if(COMMAND_RE.test(text))return {conversationId:convId,skipAI:true};
  const configured=(settings.whatsapp_handoff_keywords||[]).some(k=>String(k).trim()&&text.toLowerCase().includes(String(k).toLowerCase()));
  if(HANDOFF_RE.test(text)||configured){
   await pool.query(`UPDATE shop_whatsapp_conversations SET status='HUMAN',last_message_at=NOW(),updated_at=NOW() WHERE id=$1`,[convId]);
