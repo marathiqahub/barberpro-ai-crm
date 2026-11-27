@@ -416,8 +416,8 @@ function createAdvancedRouter(pool,tokenService){
    let applied=false;
    if(normalized.status&&entity?.id){
     const updated=await c.query(`UPDATE shop_subscriptions SET status=$2,
-      current_start=to_timestamp(NULLIF($3,0)),current_end=to_timestamp(NULLIF($4,0)),
-      next_charge_at=to_timestamp(NULLIF($5,0)),
+      current_start=COALESCE(to_timestamp(NULLIF($3,0)),current_start),current_end=COALESCE(to_timestamp(NULLIF($4,0)),current_end),
+      next_charge_at=COALESCE(to_timestamp(NULLIF($5,0)),next_charge_at),
       cancelled_at=CASE WHEN $2 IN('CANCELLED','COMPLETED','EXPIRED') THEN NOW() ELSE cancelled_at END,
       cancel_at_period_end=CASE WHEN $2 IN('CANCELLED','COMPLETED','EXPIRED','HALTED') THEN FALSE ELSE cancel_at_period_end END,
       provider_payload=provider_payload||$6::jsonb,last_webhook_created_at=COALESCE($7::timestamptz,NOW()),updated_at=NOW()
