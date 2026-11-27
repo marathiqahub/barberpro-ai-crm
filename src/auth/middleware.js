@@ -8,7 +8,7 @@ function createAuthMiddleware(pool, tokenService) {
 
     let claims;
     try {
-      claims = tokenService.verifyAccessToken(match[1]);
+      claims = tokenService.verifyAccessToken(accessToken);
     } catch {
       return res.status(401).json({ error: 'Invalid or expired access token.' });
     }
