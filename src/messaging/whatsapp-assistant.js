@@ -10,7 +10,7 @@ async function processWhatsAppAssistant(pool,{shopId,sender,body,customerId=null
   WHERE m.shop_id=$1 AND s.is_active=TRUE AND 'WHATSAPP'=ANY(m.enabled_channels)`,[shopId]);
  if(!config.rowCount||!config.rows[0].whatsapp_ai_enabled)return null;
  const settings=config.rows[0],conversation=await pool.query(`INSERT INTO shop_whatsapp_conversations(shop_id,sender,customer_id,locale)
-  VALUES($1,$2,$3,$4) ON CONFLICT(shop_id,sender) DO UPDATE SET customer_id=COALESCE(EXCLUDED.customer_id,shop_whatsapp_conversations.customer_id),last_message_at=NOW(),updated_at=NOW()
+  VALUES($1,$2,$3,$4) ON CONFLICT(shop_id,sender) DO UPDATE SET customer_id=COALESCE(EXCLUDED.customer_id,shop_whatsapp_conversations.customer_id),last_message_at=NOW(),updated_at=NOW(),expires_at=NOW()+INTERVAL '180 days'
   RETURNING id,status,locale`,[shopId,sender,customerId,settings.whatsapp_ai_locale||'en']);
  const thread=conversation.rows[0],convId=thread.id;
  await pool.query(`INSERT INTO shop_whatsapp_conversation_messages(conversation_id,direction,body)
@@ -49,7 +49,7 @@ async function processWhatsAppAssistant(pool,{shopId,sender,body,customerId=null
    const response=await fetchImpl(base+'/chat/completions',{method:'POST',headers:{Authorization:'Bearer '+env.OPENAI_API_KEY,'Content-Type':'application/json'},signal:AbortSignal.timeout(12000),body:JSON.stringify({
     model:env.OPENAI_MODEL||'gpt-4o-mini',temperature:0.2,max_tokens:220,
     messages:[
-     {role:'system',content:'You are the WhatsApp receptionist for the named BarberPro shop. Answer briefly and warmly in the customer language (English, Hindi or Marathi). Use only the supplied shop facts; never invent prices, opening hours, staff availability, booking confirmation, discounts or policies. Do not claim a booking is made. For booking, guide the customer to reply SERVICES, then SLOTS with the service ID and date; the customer can complete a booking using the displayed live slot details. Never ask for passwords, OTPs, card details or sensitive personal information. If asked for something outside the supplied facts, offer human handoff. Keep the reply under 500 characters.'},
+     {role:'system',content:'You are the WhatsApp receptionist for the named BarberPro shop. Answer briefly and warmly in the configured default language ('+settings.whatsapp_ai_locale+'), or the customer's language when clear (English, Hindi or Marathi). Use only the supplied shop facts; never invent prices, opening hours, staff availability, booking confirmation, discounts or policies. Do not claim a booking is made. For booking, guide the customer to reply SERVICES, then SLOTS with the service ID and date; the customer can complete a booking using the displayed live slot details. Never ask for passwords, OTPs, card details or sensitive personal information. If asked for something outside the supplied facts, offer human handoff. Keep the reply under 500 characters.'},
      {role:'system',content:'Verified shop facts: '+JSON.stringify(context)},
      ...historyMessages,
      {role:'user',content:text}
@@ -64,7 +64,7 @@ async function processWhatsAppAssistant(pool,{shopId,sender,body,customerId=null
  }
  const savedReply=await pool.query(`INSERT INTO shop_whatsapp_conversation_messages(conversation_id,direction,body,ai_generated)
   VALUES($1,'OUTBOUND',$2,TRUE) RETURNING id`,[convId,reply]);
- await pool.query(`UPDATE shop_whatsapp_conversations SET last_message_at=NOW(),updated_at=NOW() WHERE id=$1`,[convId]);
+ await pool.query(`UPDATE shop_whatsapp_conversations SET last_message_at=NOW(),updated_at=NOW(),expires_at=NOW()+INTERVAL '180 days' WHERE id=$1`,[convId]);
  return {body:reply,conversationId:convId,outboundMessageId:savedReply.rows[0].id,handedOff:false};
 }
 module.exports={processWhatsAppAssistant,COMMAND_RE};
