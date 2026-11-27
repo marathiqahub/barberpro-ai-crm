@@ -8,8 +8,15 @@ async function processWhatsAppAssistant(pool,{shopId,sender,body,customerId=null
  const config=await pool.query(`SELECT m.whatsapp_ai_enabled,m.whatsapp_ai_locale,m.whatsapp_ai_greeting,m.whatsapp_handoff_keywords,s.name
   FROM shop_messaging_settings m JOIN shops s ON s.id=m.shop_id
   WHERE m.shop_id=$1 AND s.is_active=TRUE AND 'WHATSAPP'=ANY(m.enabled_channels)`,[shopId]);
- if(!config.rowCount||!config.rows[0].whatsapp_ai_enabled)return null;
- const settings=config.rows[0],conversation=await pool.query(`INSERT INTO shop_whatsapp_conversations(shop_id,sender,customer_id,locale)
+ if(!config.rowCount)return null;
+ const settings=config.rows[0];
+ if(!settings.whatsapp_ai_enabled){
+  const human=await pool.query("SELECT id FROM shop_whatsapp_conversations WHERE shop_id=$1 AND sender=$2 AND status='HUMAN'",[shopId,sender]);
+  if(!human.rowCount)return null;
+  await pool.query(`INSERT INTO shop_whatsapp_conversation_messages(conversation_id,direction,body) VALUES($1,'INBOUND',$2)`,[human.rows[0].id,text]);
+  return {conversationId:human.rows[0].id,suppressReply:true};
+ }
+ const conversation=await pool.query(`INSERT INTO shop_whatsapp_conversations(shop_id,sender,customer_id,locale)
   VALUES($1,$2,$3,$4) ON CONFLICT(shop_id,sender) DO UPDATE SET customer_id=COALESCE(EXCLUDED.customer_id,shop_whatsapp_conversations.customer_id),last_message_at=NOW(),updated_at=NOW(),expires_at=NOW()+INTERVAL '180 days'
   RETURNING id,status,locale`,[shopId,sender,customerId,settings.whatsapp_ai_locale||'en']);
  const thread=conversation.rows[0],convId=thread.id;
