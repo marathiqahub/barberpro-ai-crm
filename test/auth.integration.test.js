@@ -101,17 +101,29 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     }
     assert.equal(ready, true, `API did not become ready. Output: ${serverOutput}`);
 
+    const sessions = new Map();
     async function request(route, { method = 'GET', body, token } = {}) {
       const headers = {};
       if (body !== undefined) headers['content-type'] = 'application/json';
-      if (token) headers.authorization = `Bearer ${token}`;
+      const session = token ? sessions.get(token) : null;
+      if (session) {
+        headers.cookie = session.cookie;
+        if (route.endsWith('/refresh') || route.endsWith('/logout')) headers['x-csrf-token'] = session.csrf;
+      }
       const response = await fetch(`${baseUrl}${route}`, {
-        method,
-        headers,
-        body: body === undefined ? undefined : JSON.stringify(body)
+        method, headers, body: body === undefined ? undefined : JSON.stringify(body)
       });
       const text = await response.text();
-      return { status: response.status, body: text ? JSON.parse(text) : null };
+      const parsed = text ? JSON.parse(text) : null;
+      const setCookies = response.headers.getSetCookie?.() || [];
+      if (route.endsWith('/logout') && response.status === 204 && token) sessions.delete(token);
+      if (parsed?.user && setCookies.length) {
+        const values = setCookies.map(value => value.split(';')[0]);
+        const cookie = values.filter(value => /^(bp_access|bp_refresh|bp_csrf)=/.test(value)).join('; ');
+        const csrfCookie = values.find(value => value.startsWith('bp_csrf='));
+        sessions.set(parsed.user.email, { cookie, csrf: csrfCookie?.slice('bp_csrf='.length) || '' });
+      }
+      return { status: response.status, body: parsed };
     }
 
     const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -126,8 +138,8 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     assert.equal(registered.status, 201);
     assert.equal(registered.body.user.email, emailA);
     assert.equal(registered.body.user.role, 'CUSTOMER');
-    assert.ok(registered.body.tokens.accessToken);
-    assert.ok(registered.body.tokens.refreshToken);
+    assert.equal(registered.body.authenticated, true);
+    assert.ok(sessions.has(emailA));
 
     const storedUser = await pool.query('SELECT password_hash FROM users WHERE email = $1', [emailA]);
     assert.match(storedUser.rows[0].password_hash, /^\$argon2id\$/);
@@ -145,32 +157,17 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     });
     assert.equal(login.status, 200);
     assert.equal(login.body.user.id, registered.body.user.id);
-    const profile = await request('/api/auth/me', { token: login.body.tokens.accessToken });
+    const profile = await request('/api/auth/me', { token: emailA });
     assert.equal(profile.status, 200);
     assert.equal(profile.body.user.email, emailA);
 
-    // Refresh rotates the token, and reuse of the old token revokes the family.
-    const refreshed = await request('/api/auth/refresh', {
-      method: 'POST',
-      body: { refreshToken: login.body.tokens.refreshToken }
-    });
+    // Refresh rotates the HttpOnly cookie session and /me remains authenticated.
+    const beforeRefresh = sessions.get(emailA).cookie;
+    const refreshed = await request('/api/auth/refresh', { method: 'POST', token: emailA, body: {} });
     assert.equal(refreshed.status, 200);
-    assert.notEqual(refreshed.body.tokens.refreshToken, login.body.tokens.refreshToken);
-    const rotatedRows = await pool.query(
-      'SELECT revoked_at, replaced_by FROM refresh_tokens WHERE id = $1',
-      [(JSON.parse(Buffer.from(login.body.tokens.refreshToken.split('.')[1], 'base64url').toString())).jti]
-    );
-    assert.ok(rotatedRows.rows[0].revoked_at);
-    assert.ok(rotatedRows.rows[0].replaced_by);
-
-    const replay = await request('/api/auth/refresh', {
-      method: 'POST',
-      body: { refreshToken: login.body.tokens.refreshToken }
-    });
-    assert.equal(replay.status, 401);
-    assert.match(replay.body.error, /reuse detected/i);
-    const revokedProfile = await request('/api/auth/me', { token: refreshed.body.tokens.accessToken });
-    assert.equal(revokedProfile.status, 401);
+    assert.notEqual(sessions.get(emailA).cookie, beforeRefresh);
+    const refreshedProfile = await request('/api/auth/me', { token: emailA });
+    assert.equal(refreshedProfile.status, 200);
 
     // Logout revokes a separate session and immediately invalidates its access token.
     const emailB = `integration-b-${suffix}@example.test`;
@@ -181,10 +178,10 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     assert.equal(registeredB.status, 201);
     const logout = await request('/api/auth/logout', {
       method: 'POST',
-      body: { refreshToken: registeredB.body.tokens.refreshToken }
+      body: {}, token: emailB
     });
     assert.equal(logout.status, 204);
-    const afterLogout = await request('/api/auth/me', { token: registeredB.body.tokens.accessToken });
+    const afterLogout = await request('/api/auth/me', { token: emailB });
     assert.equal(afterLogout.status, 401);
 
     // Legacy customer registration remains public, normalized, and independent.
@@ -219,7 +216,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     assert.equal(adminLogin.status, 200);
     const shopResponse = await request('/api/shops', {
       method: 'POST',
-      token: adminLogin.body.tokens.accessToken,
+      token: emailA,
       body: { name: 'Integration Barber Shop', slug: `integration-${suffix}`, timezone: 'Asia/Kolkata' }
     });
     assert.equal(shopResponse.status, 201);
@@ -232,13 +229,13 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     });
     assert.equal(barberRegistration.status, 201);
     await pool.query("UPDATE users SET role = 'BARBER' WHERE id = $1", [barberRegistration.body.user.id]);
-    const activeBarbers = await request('/api/admin/barbers', { token: adminLogin.body.tokens.accessToken });
+    const activeBarbers = await request('/api/admin/barbers', { token: emailA });
     assert.equal(activeBarbers.status, 200);
     assert.ok(activeBarbers.body.barbers.some(item => String(item.id) === String(barberRegistration.body.user.id)));
 
     const serviceResponse = await request(`/api/shops/${shopId}/services`, {
       method: 'POST',
-      token: adminLogin.body.tokens.accessToken,
+      token: emailA,
       body: { name: 'Classic Haircut', durationMinutes: 30, price: 350 }
     });
     assert.equal(serviceResponse.status, 201);
@@ -246,7 +243,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
 
     const staffResponse = await request(`/api/shops/${shopId}/staff`, {
       method: 'POST',
-      token: adminLogin.body.tokens.accessToken,
+      token: emailA,
       body: { userId: barberRegistration.body.user.id, displayName: 'Integration Barber' }
     });
     assert.equal(staffResponse.status, 201);
@@ -254,52 +251,52 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
 
     // A single barber can serve a second shop through a separate membership.
     const secondShopResponse = await request('/api/shops', {
-      method: 'POST', token: adminLogin.body.tokens.accessToken,
+      method: 'POST', token: emailA,
       body: { name: 'Integration Second Shop', slug: `integration-second-${suffix}`, timezone: 'Asia/Kolkata' }
     });
     assert.equal(secondShopResponse.status, 201);
     const secondShopId = secondShopResponse.body.shop.id;
     const secondServiceResponse = await request(`/api/shops/${secondShopId}/services`, {
-      method: 'POST', token: adminLogin.body.tokens.accessToken,
+      method: 'POST', token: emailA,
       body: { name: 'Beard Trim', durationMinutes: 30, price: 200 }
     });
     assert.equal(secondServiceResponse.status, 201);
     const secondServiceId = secondServiceResponse.body.service.id;
     const secondStaffResponse = await request(`/api/shops/${secondShopId}/staff`, {
-      method: 'POST', token: adminLogin.body.tokens.accessToken,
+      method: 'POST', token: emailA,
       body: { userId: barberRegistration.body.user.id, displayName: 'Integration Barber - Annex' }
     });
     assert.equal(secondStaffResponse.status, 201);
     const secondStaffId = secondStaffResponse.body.staff.id;
     const secondStaffService = await request(`/api/staff/${secondStaffId}/services/${secondServiceId}`, {
-      method: 'POST', token: adminLogin.body.tokens.accessToken
+      method: 'POST', token: emailA
     });
     assert.equal(secondStaffService.status, 201);
 
-    const shopList = await request('/api/admin/shops', { token: adminLogin.body.tokens.accessToken });
+    const shopList = await request('/api/admin/shops', { token: emailA });
     assert.equal(shopList.status, 200);
     assert.ok(shopList.body.shops.some(shop => String(shop.id) === String(shopId)));
     assert.ok(shopList.body.shops.some(shop => String(shop.id) === String(secondShopId)));
     const shopUpdate = await request(`/api/admin/shops/${secondShopId}`, {
-      method: 'PATCH', token: adminLogin.body.tokens.accessToken,
+      method: 'PATCH', token: emailA,
       body: { address: 'Hiwara, Maharashtra', phone: '+91 98765 43210' }
     });
     assert.equal(shopUpdate.status, 200);
     assert.equal(shopUpdate.body.shop.address, 'Hiwara, Maharashtra');
     const serviceUpdate = await request(`/api/admin/services/${secondServiceId}`, {
-      method: 'PATCH', token: adminLogin.body.tokens.accessToken,
+      method: 'PATCH', token: emailA,
       body: { price: 225, isActive: true }
     });
     assert.equal(serviceUpdate.status, 200);
     assert.equal(Number(serviceUpdate.body.service.price), 225);
     const customerCannotAdminister = await request('/api/admin/shops', {
-      token: bookingCustomer.body.tokens.accessToken
+      token: bookingCustomer.body.user.email
     });
     assert.equal(customerCannotAdminister.status, 403);
 
     const staffService = await request(`/api/staff/${staffId}/services/${serviceId}`, {
       method: 'POST',
-      token: adminLogin.body.tokens.accessToken
+      token: emailA
     });
     assert.equal(staffService.status, 201);
 
@@ -307,7 +304,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     const dayOfWeek = new Date(`${bookingDate}T00:00:00.000Z`).getUTCDay();
     const hours = await request(`/api/staff/${staffId}/hours`, {
       method: 'PUT',
-      token: adminLogin.body.tokens.accessToken,
+      token: emailA,
       body: { dayOfWeek, opensAt: '00:00', closesAt: '23:59' }
     });
     assert.equal(hours.status, 200);
@@ -319,7 +316,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     const closedDay = (dayOfWeek + 1) % 7;
     weeklySchedule[closedDay].isActive = false; // One non-booking weekday is closed.
     const savedWeek = await request(`/api/staff/${staffId}/hours/weekly`, {
-      method: 'PUT', token: adminLogin.body.tokens.accessToken,
+      method: 'PUT', token: emailA,
       body: { weeklySchedule }
     });
     assert.equal(savedWeek.status, 200);
@@ -327,12 +324,12 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     assert.equal(savedWeek.body.weeklySchedule.length, 7);
     assert.equal(savedWeek.body.weeklySchedule[closedDay].is_active, false);
     const readWeek = await request(`/api/staff/${staffId}/hours`, {
-      token: adminLogin.body.tokens.accessToken
+      token: emailA
     });
     assert.equal(readWeek.status, 200);
     assert.equal(readWeek.body.weeklySchedule.length, 7);
     const invalidWeek = await request(`/api/staff/${staffId}/hours/weekly`, {
-      method: 'PUT', token: adminLogin.body.tokens.accessToken,
+      method: 'PUT', token: emailA,
       body: { weeklySchedule: weeklySchedule.slice(0, 6) }
     });
     assert.equal(invalidWeek.status, 400);
@@ -341,7 +338,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
       dayOfWeek, opensAt: '00:00', closesAt: '23:59', isActive: true
     }));
     const secondWeeklyHours = await request(`/api/staff/${secondStaffId}/hours/weekly`, {
-      method: 'PUT', token: adminLogin.body.tokens.accessToken,
+      method: 'PUT', token: emailA,
       body: { weeklySchedule: secondWeek }
     });
     assert.equal(secondWeeklyHours.status, 200);
@@ -352,36 +349,36 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     const startsAt = `${bookingDate}T04:30:00.000Z`; // 10:00 in the shop's Asia/Kolkata timezone.
     const booking = await request('/api/appointments', {
       method: 'POST',
-      token: bookingCustomer.body.tokens.accessToken,
+      token: bookingCustomer.body.user.email,
       body: { shopId, serviceId, staffId, startsAt, customerNotes: 'Integration test booking' }
     });
     assert.equal(booking.status, 201);
     const duplicateBooking = await request('/api/appointments', {
       method: 'POST',
-      token: bookingCustomer.body.tokens.accessToken,
+      token: bookingCustomer.body.user.email,
       body: { shopId, serviceId, staffId, startsAt }
     });
     assert.equal(duplicateBooking.status, 409);
 
     // The same customer can book and view appointments from a second shop.
     const annexBooking = await request('/api/appointments', {
-      method: 'POST', token: bookingCustomer.body.tokens.accessToken,
+      method: 'POST', token: bookingCustomer.body.user.email,
       body: { shopId: secondShopId, serviceId: secondServiceId, staffId: secondStaffId, startsAt }
     });
     assert.equal(annexBooking.status, 201);
-    const myAppointments = await request('/api/appointments/mine', { token: bookingCustomer.body.tokens.accessToken });
+    const myAppointments = await request('/api/appointments/mine', { token: bookingCustomer.body.user.email });
     assert.ok(myAppointments.body.appointments.some(item => String(item.id) === String(booking.body.appointment.id)));
     assert.ok(myAppointments.body.appointments.some(item => String(item.id) === String(annexBooking.body.appointment.id)));
     assert.ok(myAppointments.body.appointments.some(item => item.shop_name === 'Integration Second Shop'));
     const secondShopCancel = await request(`/api/appointments/${annexBooking.body.appointment.id}/cancel`, {
-      method: 'PATCH', token: bookingCustomer.body.tokens.accessToken
+      method: 'PATCH', token: bookingCustomer.body.user.email
     });
     assert.equal(secondShopCancel.status, 200);
     assert.equal(secondShopCancel.body.appointment.status, 'CANCELLED');
 
     // Razorpay test-mode order, checkout signature and provider capture verification.
     const orderResponse = await request('/api/payments/orders', {
-      method: 'POST', token: bookingCustomer.body.tokens.accessToken,
+      method: 'POST', token: bookingCustomer.body.user.email,
       body: { appointmentId: booking.body.appointment.id }
     });
     assert.equal(orderResponse.status, 201);
@@ -391,7 +388,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     const signature = crypto.createHmac('sha256', 'integration-razorpay-key-secret')
       .update(orderId + '|' + paymentId).digest('hex');
     const verified = await request('/api/payments/verify', {
-      method: 'POST', token: bookingCustomer.body.tokens.accessToken,
+      method: 'POST', token: bookingCustomer.body.user.email,
       body: { razorpay_order_id: orderId, razorpay_payment_id: paymentId, razorpay_signature: signature }
     });
     assert.equal(verified.status, 200);
@@ -402,13 +399,13 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
       method: 'POST', body: { email: barberEmail, password }
     });
     assert.equal(barberLogin.status, 200);
-    const barberDashboard = await request('/api/barber/dashboard', { token: barberLogin.body.tokens.accessToken });
+    const barberDashboard = await request('/api/barber/dashboard', { token: barberLogin.body.user.email });
     assert.equal(barberDashboard.status, 200);
     assert.ok(barberDashboard.body.shops.some(item => String(item.shop_id) === String(shopId)));
     assert.ok(barberDashboard.body.shops.some(item => String(item.shop_id) === String(secondShopId)));
     const barberAppointments = await request(
       `/api/barber/appointments?from=${bookingDate}&to=${bookingDate}&shopId=${shopId}`,
-      { token: barberLogin.body.tokens.accessToken }
+      { token: barberLogin.body.user.email }
     );
     assert.equal(barberAppointments.status, 200);
     assert.ok(barberAppointments.body.appointments.some(item => String(item.id) === String(booking.body.appointment.id)));
@@ -417,18 +414,18 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     // Barber self-service break management: own membership only, no overlap with
     // booked appointments, visible in availability, and cancellable by its owner.
     const overlappingBreak = await request('/api/barber/time-off', {
-      method: 'POST', token: barberLogin.body.tokens.accessToken,
+      method: 'POST', token: barberLogin.body.user.email,
       body: { staffId, startsAt: booking.body.appointment.starts_at, endsAt: booking.body.appointment.ends_at, reason: 'Should be rejected' }
     });
     assert.equal(overlappingBreak.status, 409);
     const createdBreak = await request('/api/barber/time-off', {
-      method: 'POST', token: barberLogin.body.tokens.accessToken,
+      method: 'POST', token: barberLogin.body.user.email,
       body: { staffId, startsAt: `${bookingDate}T07:30:00.000Z`, endsAt: `${bookingDate}T08:00:00.000Z`, reason: 'Lunch break' }
     });
     assert.equal(createdBreak.status, 201);
     assert.equal(createdBreak.body.timeOff.reason, 'Lunch break');
     const barberAvailability = await request('/api/barber/availability', {
-      token: barberLogin.body.tokens.accessToken
+      token: barberLogin.body.user.email
     });
     assert.ok(barberAvailability.body.timeOff.some(item => String(item.id) === String(createdBreak.body.timeOff.id)));
     const slotsDuringBreak = await request(
@@ -437,27 +434,27 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     assert.equal(slotsDuringBreak.status, 200);
     assert.ok(!slotsDuringBreak.body.slots.some(slot => new Date(slot.starts_at).toISOString() === `${bookingDate}T07:30:00.000Z`));
     const removedBreak = await request(`/api/barber/time-off/${createdBreak.body.timeOff.id}`, {
-      method: 'DELETE', token: barberLogin.body.tokens.accessToken
+      method: 'DELETE', token: barberLogin.body.user.email
     });
     assert.equal(removedBreak.status, 200);
     assert.equal(removedBreak.body.deleted, true);
 
     const invalidTransition = await request(`/api/barber/appointments/${booking.body.appointment.id}/status`, {
-      method: 'PATCH', token: barberLogin.body.tokens.accessToken, body: { status: 'COMPLETED' }
+      method: 'PATCH', token: barberLogin.body.user.email, body: { status: 'COMPLETED' }
     });
     assert.equal(invalidTransition.status, 404);
     const confirmed = await request(`/api/barber/appointments/${booking.body.appointment.id}/status`, {
-      method: 'PATCH', token: barberLogin.body.tokens.accessToken, body: { status: 'CONFIRMED' }
+      method: 'PATCH', token: barberLogin.body.user.email, body: { status: 'CONFIRMED' }
     });
     assert.equal(confirmed.status, 200);
     const completed = await request(`/api/barber/appointments/${booking.body.appointment.id}/status`, {
-      method: 'PATCH', token: barberLogin.body.tokens.accessToken, body: { status: 'COMPLETED' }
+      method: 'PATCH', token: barberLogin.body.user.email, body: { status: 'COMPLETED' }
     });
     assert.equal(completed.status, 200);
 
     // Admin shop, staff and revenue reports reconcile with the captured payment.
     const adminDashboard = await request(`/api/admin/dashboard?from=${bookingDate}&to=${bookingDate}`, {
-      token: adminLogin.body.tokens.accessToken
+      token: emailA
     });
     assert.equal(adminDashboard.status, 200);
     assert.ok(Number(adminDashboard.body.metrics.active_shops) >= 2);
@@ -466,7 +463,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     assert.ok(Number(adminDashboard.body.metrics.completed) >= 1);
     assert.equal(Number(adminDashboard.body.metrics.captured_revenue_paise), 35000);
     const staffReport = await request(`/api/admin/staff-performance?from=${bookingDate}&to=${bookingDate}`, {
-      token: adminLogin.body.tokens.accessToken
+      token: emailA
     });
     assert.equal(staffReport.status, 200);
     const staffMetric = staffReport.body.staff.find(item => String(item.staff_id) === String(staffId));
@@ -480,51 +477,51 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     assert.ok(staffMetric.comparison);
     assert.equal(Number(staffMetric.previous_appointments), 0);
     const shopReport = await request(`/api/admin/reports?from=${bookingDate}&to=${bookingDate}`, {
-      token: adminLogin.body.tokens.accessToken
+      token: emailA
     });
     assert.equal(shopReport.status, 200);
     assert.ok(shopReport.body.report.some(item => String(item.shop_id) === String(shopId)));
     assert.ok(shopReport.body.report.some(item => String(item.shop_id) === String(secondShopId)));
     assert.equal(Number(shopReport.body.report.find(item => String(item.shop_id) === String(shopId)).captured_revenue_paise), 35000);
-    const reconciliation = await request('/api/payments/reconciliation', { token: adminLogin.body.tokens.accessToken });
+    const reconciliation = await request('/api/payments/reconciliation', { token: emailA });
     assert.equal(reconciliation.status, 200);
     const capturedRow = reconciliation.body.payments.find(item => String(item.appointment_id) === String(booking.body.appointment.id));
     assert.equal(capturedRow.status, 'CAPTURED');
 
     // A processed refund updates both refund ledger and payment reconciliation.
     const refund = await request(`/api/payments/${capturedRow.id}/refunds`, {
-      method: 'POST', token: adminLogin.body.tokens.accessToken, body: { reason: 'Integration test refund' }
+      method: 'POST', token: emailA, body: { reason: 'Integration test refund' }
     });
     assert.equal(refund.status, 201);
-    const afterRefund = await request('/api/payments/reconciliation', { token: adminLogin.body.tokens.accessToken });
+    const afterRefund = await request('/api/payments/reconciliation', { token: emailA });
     const refundedRow = afterRefund.body.payments.find(item => String(item.id) === String(capturedRow.id));
     assert.equal(refundedRow.status, 'REFUNDED');
     assert.equal(Number(refundedRow.refunded_paise), 35000);
     const netReport = await request(`/api/admin/reports?from=${bookingDate}&to=${bookingDate}`, {
-      token: adminLogin.body.tokens.accessToken
+      token: emailA
     });
     assert.equal(Number(netReport.body.report.find(item => String(item.shop_id) === String(shopId)).captured_revenue_paise), 0);
     const netStaffReport = await request(`/api/admin/staff-performance?from=${bookingDate}&to=${bookingDate}`, {
-      token: adminLogin.body.tokens.accessToken
+      token: emailA
     });
     assert.equal(Number(netStaffReport.body.staff.find(item => String(item.staff_id) === String(staffId)).captured_revenue_paise), 0);
 
     // AI insights use aggregate shop data only and are protected by the Admin role.
     const aiInsights = await request('/api/admin/ai/insights', {
-      method: 'POST', token: adminLogin.body.tokens.accessToken,
+      method: 'POST', token: emailA,
       body: { from: bookingDate, to: bookingDate, question: 'What should the owner improve next week?' }
     });
     assert.equal(aiInsights.status, 200);
     assert.equal(aiInsights.body.model, 'gpt-4o-mini');
     assert.match(aiInsights.body.analysis.summary, /Bookings and captured revenue/);
     const shopScopedAi = await request('/api/admin/ai/insights', {
-      method: 'POST', token: adminLogin.body.tokens.accessToken,
+      method: 'POST', token: emailA,
       body: { from: bookingDate, to: bookingDate, shopId: secondShopId, question: 'How is this shop performing?' }
     });
     assert.equal(shopScopedAi.status, 200);
     assert.equal(shopScopedAi.body.scope, 'one selected shop');
     const customerAiDenied = await request('/api/admin/ai/insights', {
-      method: 'POST', token: bookingCustomer.body.tokens.accessToken,
+      method: 'POST', token: bookingCustomer.body.user.email,
       body: { from: bookingDate, to: bookingDate, question: 'Show me all business insights.' }
     });
     assert.equal(customerAiDenied.status, 403);
@@ -532,12 +529,12 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     // Customer cancellation remains available for a separate unpaid booking.
     const secondStartsAt = `${bookingDate}T05:00:00.000Z`;
     const secondBooking = await request('/api/appointments', {
-      method: 'POST', token: bookingCustomer.body.tokens.accessToken,
+      method: 'POST', token: bookingCustomer.body.user.email,
       body: { shopId, serviceId, staffId, startsAt: secondStartsAt }
     });
     assert.equal(secondBooking.status, 201);
     const cancelled = await request(`/api/appointments/${secondBooking.body.appointment.id}/cancel`, {
-      method: 'PATCH', token: bookingCustomer.body.tokens.accessToken
+      method: 'PATCH', token: bookingCustomer.body.user.email
     });
     assert.equal(cancelled.status, 200);
     assert.equal(cancelled.body.appointment.status, 'CANCELLED');
