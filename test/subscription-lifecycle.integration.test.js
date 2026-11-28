@@ -12,15 +12,15 @@ test('subscription lifecycle APIs, webhook ordering, authorization, reconciliati
  const pool=new Pool({connectionString:url,max:12}),secret=crypto.randomBytes(32).toString('hex');
  const suffix=crypto.randomUUID(),slug='sub-api-'+suffix,providerPlan='plan_'+suffix,providerSub='sub_'+suffix;
  let shopId,otherShopId,planId,ownerId,outsiderId,server,trialSubscriptionId,subscriptionId;
- let providerSubscriptionCreates=0,providerCancelCalls=0;
+ let providerSubscriptionCreates=0,providerCancelCalls=0,firstProviderSubscriptionId=null;
  const authMiddleware={
   authenticate(req,res,next){const token=(req.get('authorization')||'').replace(/^Bearer\s+/i,'');if(!['owner','outsider','admin'].includes(token))return res.status(401).json({error:'unauthorized'});req.user={id:token==='outsider'?outsiderId:ownerId,role:token==='admin'?'ADMIN':'CUSTOMER'};next();},
   requireRole(...roles){return(req,res,next)=>roles.includes(req.user.role)?next():res.status(403).json({error:'forbidden'});}
  };
  const fetchImpl=async(url,options={})=>{
   const u=new URL(url),path=u.pathname.replace('/v1','');
-  if(path==='/subscriptions'&&options.method==='POST'){providerSubscriptionCreates++;return new Response(JSON.stringify({id:providerSub,short_url:'https://checkout.razorpay.test/'+providerSub,status:'created'}),{status:200});}
-  if(path==='/subscriptions/'+providerSub+'/cancel'){providerCancelCalls++;return new Response(JSON.stringify({id:providerSub,status:'cancelled'}),{status:200});}
+  if(path==='/subscriptions'&&options.method==='POST'){providerSubscriptionCreates++;const id=providerSub+'_'+providerSubscriptionCreates;if(providerSubscriptionCreates===1)firstProviderSubscriptionId=id;return new Response(JSON.stringify({id,short_url:'https://checkout.razorpay.test/'+id,status:'created'}),{status:200});}
+  if(path.startsWith('/subscriptions/')&&path.endsWith('/cancel')){providerCancelCalls++;return new Response(JSON.stringify({id:providerSub,status:'cancelled'}),{status:200});}
   if(path==='/invoices'){return new Response(JSON.stringify({items:[{id:'inv_'+suffix,payment_id:'pay_'+suffix,invoice_number:'INV-'+suffix,amount:49900,status:'paid',paid_at:Math.floor(Date.now()/1000),short_url:'https://invoice.test/'+suffix}]}),{status:200});}
   if(path==='/payments/pay_'+suffix){return new Response(JSON.stringify({id:'pay_'+suffix,status:'captured',amount:49900,created_at:Math.floor(Date.now()/1000)}),{status:200});}
   return new Response(JSON.stringify({error:{description:'Unexpected mocked Razorpay request: '+path}}),{status:500});
@@ -37,7 +37,7 @@ test('subscription lifecycle APIs, webhook ordering, authorization, reconciliati
   server=createServer(app);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   const base='http://127.0.0.1:'+server.address().port;
   async function request(path,{method='GET',token='owner',body}={}){const headers={};if(token)headers.authorization='Bearer '+token;if(body!==undefined)headers['content-type']='application/json';const response=await fetch(base+path,{method,headers,body:body===undefined?undefined:JSON.stringify(body)});return {status:response.status,body:await response.json().catch(()=>({}))};}
-  async function webhook(event,id,createdAt,entities={}){const body=JSON.stringify({event,created_at:createdAt,payload:{subscription:{entity:{id:providerSub,...(entities.subscription||{})}},...(entities.payment?{payment:{entity:entities.payment}}:{}),...(entities.invoice?{invoice:{entity:entities.invoice}}:{})}});const signature=crypto.createHmac('sha256',secret).update(body).digest('hex');return fetch(base+'/api/subscriptions/webhook',{method:'POST',headers:{'content-type':'application/json','x-razorpay-signature':signature,'x-razorpay-event-id':id},body});}
+  async function webhook(event,id,createdAt,entities={}){const body=JSON.stringify({event,created_at:createdAt,payload:{subscription:{entity:{id:firstProviderSubscriptionId,...(entities.subscription||{})}},...(entities.payment?{payment:{entity:entities.payment}}:{}),...(entities.invoice?{invoice:{entity:entities.invoice}}:{})}});const signature=crypto.createHmac('sha256',secret).update(body).digest('hex');return fetch(base+'/api/subscriptions/webhook',{method:'POST',headers:{'content-type':'application/json','x-razorpay-signature':signature,'x-razorpay-event-id':id},body});}
 
   // Billing membership is shop-scoped; authentication alone is not sufficient.
   assert.equal((await request('/shops/'+shopId+'/subscription',{token:'outsider'})).status,403);
@@ -108,7 +108,7 @@ test('subscription lifecycle APIs, webhook ordering, authorization, reconciliati
  }finally{
   if(server)await new Promise(resolve=>server.close(resolve));
   if(shopId){
-   await pool.query('DELETE FROM shop_subscription_webhook_events WHERE razorpay_subscription_id=$1',[providerSub]).catch(()=>{});
+   await pool.query('DELETE FROM shop_subscription_webhook_events WHERE razorpay_subscription_id=$1',[firstProviderSubscriptionId]).catch(()=>{});
    await pool.query('DELETE FROM subscription_webhook_events WHERE payload::text LIKE $1',['%'+providerSub+'%']).catch(()=>{});
    await pool.query('DELETE FROM shop_subscriptions WHERE shop_id=$1',[shopId]).catch(()=>{});
    await pool.query('DELETE FROM shop_billing_members WHERE shop_id=$1',[shopId]).catch(()=>{});
