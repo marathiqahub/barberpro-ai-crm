@@ -137,8 +137,8 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     assert.equal(registered.status, 201);
     assert.equal(registered.body.user.email, emailA);
     assert.equal(registered.body.user.role, 'CUSTOMER');
-    assert.ok(registered.body.tokens.accessToken);
-    assert.ok(registered.body.tokens.refreshToken);
+    assert.equal(registered.body.authenticated, true);
+    assert.ok(sessions.has(emailA));
 
     const storedUser = await pool.query('SELECT password_hash FROM users WHERE email = $1', [emailA]);
     assert.match(storedUser.rows[0].password_hash, /^\$argon2id\$/);
@@ -174,7 +174,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
       method: 'POST',
       body: { name: 'Logout Customer', email: emailB, password }
     });
-    assert.equal(registeredB.status, 201);\n    const emailB = registeredB.body.user.email;
+    assert.equal(registeredB.status, 201);
     const logout = await request('/api/auth/logout', {
       method: 'POST',
       body: {}, token: emailB
@@ -228,7 +228,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     });
     assert.equal(barberRegistration.status, 201);
     await pool.query("UPDATE users SET role = 'BARBER' WHERE id = $1", [barberRegistration.body.user.id]);
-    const activeBarbers = await request('/api/admin/barbers', { token: adminLogin.body.tokens.accessToken });
+    const activeBarbers = await request('/api/admin/barbers', { token: emailA });
     assert.equal(activeBarbers.status, 200);
     assert.ok(activeBarbers.body.barbers.some(item => String(item.id) === String(barberRegistration.body.user.id)));
 
@@ -348,7 +348,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     const startsAt = `${bookingDate}T04:30:00.000Z`; // 10:00 in the shop's Asia/Kolkata timezone.
     const booking = await request('/api/appointments', {
       method: 'POST',
-      token: bookingCustomer.body.tokens.accessToken,
+      token: bookingCustomer.body.user.email,
       body: { shopId, serviceId, staffId, startsAt, customerNotes: 'Integration test booking' }
     });
     assert.equal(booking.status, 201);
@@ -404,7 +404,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     assert.ok(barberDashboard.body.shops.some(item => String(item.shop_id) === String(secondShopId)));
     const barberAppointments = await request(
       `/api/barber/appointments?from=${bookingDate}&to=${bookingDate}&shopId=${shopId}`,
-      { token: barberLogin.body.tokens.accessToken }
+      { token: barberLogin.body.user.email }
     );
     assert.equal(barberAppointments.status, 200);
     assert.ok(barberAppointments.body.appointments.some(item => String(item.id) === String(booking.body.appointment.id)));
