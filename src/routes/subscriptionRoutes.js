@@ -117,9 +117,9 @@ function createSubscriptionRouter(pool,tokenService,options={}) {
     const status=map[event],isFresh=!eventTime||!sub.last_webhook_created_at||eventTime>new Date(sub.last_webhook_created_at);
     await c.query(`INSERT INTO shop_subscription_webhook_events(event_id,event_type,razorpay_subscription_id,provider_created_at,payload)
       VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT(event_id) DO NOTHING`,[eventId,event,subId,eventTime,JSON.stringify(body)]);
-    if(status&&isFresh)await c.query(`UPDATE shop_subscriptions SET status=$2,current_start=COALESCE(to_timestamp(NULLIF($3,'')::numeric),current_start),
+    if(status&&isFresh)await c.query(`UPDATE shop_subscriptions SET status=$2::varchar,current_start=COALESCE(to_timestamp(NULLIF($3,'')::numeric),current_start),
       current_end=COALESCE(to_timestamp(NULLIF($4,'')::numeric),current_end),next_charge_at=COALESCE(to_timestamp(NULLIF($5,'')::numeric),next_charge_at),
-      cancelled_at=CASE WHEN $2='CANCELLED' THEN NOW() ELSE cancelled_at END,last_webhook_created_at=COALESCE($6,last_webhook_created_at),updated_at=NOW() WHERE id=$1`,
+      cancelled_at=CASE WHEN $2::varchar='CANCELLED' THEN NOW() ELSE cancelled_at END,last_webhook_created_at=COALESCE($6,last_webhook_created_at),updated_at=NOW() WHERE id=$1`,
       [sub.id,status,String(entity.current_start||''),String(entity.current_end||''),String(entity.charge_at||''),eventTime]);
     else if(isFresh&&eventTime)await c.query('UPDATE shop_subscriptions SET last_webhook_created_at=$2,updated_at=NOW() WHERE id=$1',[sub.id,eventTime]);
     if(event==='subscription.halted'&&isFresh)await c.query("UPDATE shop_subscriptions SET last_payment_failed_at=NOW(),failure_count=failure_count+1,reminder_sent_at=NULL WHERE id=$1",[sub.id]);
