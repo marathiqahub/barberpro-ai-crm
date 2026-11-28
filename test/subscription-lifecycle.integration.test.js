@@ -110,7 +110,9 @@ test('subscription lifecycle APIs, webhook ordering, authorization, reconciliati
   if(shopId){
    await pool.query('DELETE FROM shop_subscription_webhook_events WHERE razorpay_subscription_id=$1',[firstProviderSubscriptionId]).catch(()=>{});
    await pool.query('DELETE FROM subscription_webhook_events WHERE payload::text LIKE $1',['%'+providerSub+'%']).catch(()=>{});
-   await pool.query('DELETE FROM subscription_payments WHERE shop_id=$1',[shopId]).catch(()=>{});\n   await pool.query('DELETE FROM subscription_invoices WHERE shop_id=$1',[shopId]).catch(()=>{});\n   await pool.query('DELETE FROM shop_subscriptions WHERE shop_id=$1',[shopId]).catch(()=>{});
+   await pool.query('DELETE FROM subscription_payments WHERE shop_id=$1',[shopId]).catch(()=>{});
+   await pool.query('DELETE FROM subscription_invoices WHERE shop_id=$1',[shopId]).catch(()=>{});
+   await pool.query('DELETE FROM shop_subscriptions WHERE shop_id=$1',[shopId]).catch(()=>{});
    await pool.query('DELETE FROM shop_billing_members WHERE shop_id=$1',[shopId]).catch(()=>{});
    await pool.query('DELETE FROM shops WHERE id=ANY($1::bigint[])',[[shopId,otherShopId].filter(Boolean)]).catch(()=>{});
   }
