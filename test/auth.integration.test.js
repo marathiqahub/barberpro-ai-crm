@@ -115,7 +115,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
       });
       const text = await response.text();
       const parsed = text ? JSON.parse(text) : null;
-      const setCookies = response.headers.getSetCookie?.() || [];
+      const setCookies = response.headers.getSetCookie?.() || [];\n      if (route.endsWith('/logout') && response.status === 204 && token) sessions.delete(token);
       if (parsed?.user && setCookies.length) {
         const values = setCookies.map(value => value.split(';')[0]);
         const cookie = values.filter(value => /^(bp_access|bp_refresh|bp_csrf)=/.test(value)).join('; ');
