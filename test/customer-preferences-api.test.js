@@ -50,6 +50,7 @@ function createHarness(options={}){
   const app=express();
   app.use(express.json());
   app.use(createRetentionRouter(pool,{verifyAccessToken:()=>({sub:7,familyId:'test-family'})}));
+  app.use((error,req,res,next)=>res.status(500).json({error:'Internal server error.'}));
   const server=createServer(app);
   return {server,calls};
 }
