@@ -50,6 +50,8 @@ function createHarness(options={}){
   const app=express();
   app.use(express.json());
   app.use(createRetentionRouter(pool,{verifyAccessToken:()=>({sub:7,familyId:'test-family'})}));
+  // Keep the intentionally simulated transaction failure quiet; the test asserts its 500 response and rollback.
+  app.use((error,req,res,next)=>res.status(500).json({error:'Internal server error.'}));
   const server=createServer(app);
   return {server,calls};
 }
