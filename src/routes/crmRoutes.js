@@ -28,10 +28,10 @@ function createCrmRouter(pool, tokenService) {
         COALESCE(cp.marketing_sms_consent,FALSE) marketing_sms_consent,
         cp.notes
        FROM users u
-       JOIN appointments a ON a.customer_id=u.id AND a.shop_id=$1
+       LEFT JOIN appointments a ON a.customer_id=u.id AND a.shop_id=$1
        LEFT JOIN shop_customer_profiles cp ON cp.shop_id=$1 AND cp.customer_id=u.id
        LEFT JOIN shop_loyalty_accounts la ON la.shop_id=$1 AND la.customer_id=u.id
-       WHERE u.role='CUSTOMER' AND ($2='' OR u.name ILIKE '%'||$2||'%' OR u.email ILIKE '%'||$2||'%')
+       WHERE u.role='CUSTOMER' AND (a.id IS NOT NULL OR cp.customer_id IS NOT NULL) AND ($2='' OR u.name ILIKE '%'||$2||'%' OR u.email ILIKE '%'||$2||'%' OR u.phone ILIKE '%'||$2||'%')
        GROUP BY u.id,u.name,u.email,la.balance_points,cp.marketing_email_consent,cp.marketing_sms_consent,cp.notes
        ORDER BY last_visit DESC NULLS LAST,u.name LIMIT 500`,[shopId,search]);
     res.json({shopId,customers:result.rows});
@@ -43,8 +43,8 @@ function createCrmRouter(pool, tokenService) {
        typeof b.marketingSmsConsent!=='boolean'||(b.notes!==undefined&&(typeof b.notes!=='string'||b.notes.length>2000)))
       return res.status(400).json({error:'Provide valid consent choices and notes.'});
     if(!await activeShop(shopId))return res.status(404).json({error:'Active shop not found.'});
-    const customer=await pool.query(`SELECT 1 FROM appointments WHERE shop_id=$1 AND customer_id=$2 LIMIT 1`,[shopId,customerId]);
-    if(!customer.rowCount)return res.status(404).json({error:'Customer has no booking history at this shop.'});
+    const customer=await pool.query(`SELECT 1 FROM users u WHERE u.id=$2 AND u.role='CUSTOMER' AND (EXISTS(SELECT 1 FROM appointments WHERE shop_id=$1 AND customer_id=$2) OR EXISTS(SELECT 1 FROM shop_customer_profiles WHERE shop_id=$1 AND customer_id=$2))`,[shopId,customerId]);
+    if(!customer.rowCount)return res.status(404).json({error:'Customer is not linked to this shop.'});
     const result=await pool.query(
       `INSERT INTO shop_customer_profiles(shop_id,customer_id,marketing_email_consent,marketing_sms_consent,consent_updated_at,notes)
        VALUES($1,$2,$3,$4,NOW(),$5)
