@@ -30,7 +30,7 @@ test('subscription lifecycle APIs, webhook ordering, authorization, reconciliati
   const other=await pool.query("INSERT INTO shops(name,slug) VALUES($1,$2) RETURNING id",['Other subscription shop',slug+'-other']);otherShopId=other.rows[0].id;
   const owner=await pool.query("INSERT INTO users(name,email,password_hash,role) VALUES('Billing owner',$1,'test-hash','CUSTOMER') RETURNING id",['owner-'+suffix+'@example.test']);ownerId=owner.rows[0].id;
   const outsider=await pool.query("INSERT INTO users(name,email,password_hash,role) VALUES('Other user',$1,'test-hash','CUSTOMER') RETURNING id",['outsider-'+suffix+'@example.test']);outsiderId=outsider.rows[0].id;
-  const plan=await pool.query("INSERT INTO barberpro_subscription_plans(code,name,billing_period,amount_paise,razorpay_plan_id,feature_entitlements) VALUES($1,'API test plan','MONTHLY',49900,$2,'{\\"ADVANCED_REPORTS\\":true}'::jsonb) RETURNING id",['api-'+suffix.slice(0,28),providerPlan]);planId=plan.rows[0].id;
+  const plan=await pool.query("INSERT INTO barberpro_subscription_plans(code,name,billing_period,amount_paise,razorpay_plan_id,feature_entitlements) VALUES($1,'API test plan','MONTHLY',49900,$2,'{\"ADVANCED_REPORTS\":true}'::jsonb) RETURNING id",['api-'+suffix.slice(0,28),providerPlan]);planId=plan.rows[0].id;
   await pool.query("INSERT INTO shop_billing_members(shop_id,user_id,role) VALUES($1,$2,'SHOP_OWNER')",[shopId,ownerId]);
   const app=express();app.use(express.json({verify:(req,res,buf)=>{req.rawBody=Buffer.from(buf);}}));
   app.use('/api',createSubscriptionRouter(pool,{}, {env:{RAZORPAY_KEY_ID:'rzp_test',RAZORPAY_KEY_SECRET:'secret',RAZORPAY_SUBSCRIPTION_WEBHOOK_SECRET:secret},fetchImpl,authMiddleware}));
