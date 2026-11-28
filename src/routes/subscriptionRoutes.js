@@ -112,7 +112,7 @@ function createSubscriptionRouter(pool,tokenService,options={}) {
    const subId=entity.id||payment.subscription_id||invoice.subscription_id;
    const found=subId?await c.query('SELECT * FROM shop_subscriptions WHERE razorpay_subscription_id=$1 FOR UPDATE',[subId]):{rowCount:0,rows:[]};
    if(found.rowCount){
-    const sub=found.rows[0],map={'subscription.authenticated':'AUTHENTICATED','subscription.activated':'ACTIVE','subscription.charged':'ACTIVE','subscription.pending':'PENDING','subscription.halted':'HALTED','subscription.cancelled':'CANCELLED','subscription.completed':'COMPLETED','subscription.expired':'EXPIRED'};
+    const sub=found.rows[0],map={'subscription.authenticated':'AUTHENTICATED','subscription.activated':'ACTIVE','subscription.charged':'ACTIVE','subscription.pending':'PENDING','subscription.halted':'HALTED','subscription.cancelled':'CANCELLED','subscription.completed':'EXPIRED','subscription.expired':'EXPIRED'};
     const status=map[event],isFresh=!eventTime||!sub.last_webhook_created_at||eventTime>=new Date(sub.last_webhook_created_at);
     await c.query(`INSERT INTO shop_subscription_webhook_events(event_id,event_type,razorpay_subscription_id,provider_created_at,payload)
       VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT(event_id) DO NOTHING`,[eventId,event,subId,eventTime,JSON.stringify(body)]);
