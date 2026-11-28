@@ -42,6 +42,7 @@ function createSubscriptionRouter(pool,tokenService,options={}) {
   const c=await pool.connect();try{await c.query('BEGIN');
    const plan=await c.query('SELECT id FROM barberpro_subscription_plans WHERE id=$1 AND is_active=TRUE',[planId]);
    if(!plan.rowCount){await c.query('ROLLBACK');return s.status(404).json({error:'Active plan not found.'});}
+   await c.query("SELECT pg_advisory_xact_lock(hashtextextended('subscription-shop:'||$1::text,0))",[q.shopId]);
    const existing=await c.query("SELECT id,status FROM shop_subscriptions WHERE shop_id=$1 AND status IN('CREATED','AUTHENTICATED','ACTIVE','PENDING','TRIALING') FOR UPDATE",[q.shopId]);
    if(existing.rowCount){await c.query('ROLLBACK');return s.status(409).json({error:'Shop already has a current subscription.'});}
    const prior=await c.query('SELECT 1 FROM shop_subscriptions WHERE shop_id=$1 AND trial_ends_at IS NOT NULL',[q.shopId]);
@@ -52,13 +53,16 @@ function createSubscriptionRouter(pool,tokenService,options={}) {
  }));
  r.post('/shops/:shopId/subscription',...signed,billing,wrap(async(q,s)=>{
   const planId=validId(q.body?.planId);if(!planId)return s.status(400).json({error:'Valid planId is required.'});
-  const plan=await pool.query('SELECT id,razorpay_plan_id FROM barberpro_subscription_plans WHERE id=$1 AND is_active=TRUE',[planId]);
-  if(!plan.rowCount||!plan.rows[0].razorpay_plan_id)return s.status(404).json({error:'Active provider-backed plan not found.'});
-  const current=await pool.query("SELECT id FROM shop_subscriptions WHERE shop_id=$1 AND status IN('CREATED','AUTHENTICATED','ACTIVE','PENDING','TRIALING')",[q.shopId]);
-  if(current.rowCount)return s.status(409).json({error:'Shop already has a current subscription.'});
-  const remote=await provider('/subscriptions','POST',{plan_id:plan.rows[0].razorpay_plan_id,total_count:120,customer_notify:1,notes:{shopId:String(q.shopId),planId:String(planId)}});
-  const saved=await pool.query("INSERT INTO shop_subscriptions(shop_id,plan_id,razorpay_subscription_id,status,short_url,provider_payload,created_by) VALUES($1,$2,$3,'CREATED',$4,$5::jsonb,$6) RETURNING id,shop_id,plan_id,status,short_url",[q.shopId,planId,remote.id,remote.short_url,JSON.stringify({id:remote.id,status:remote.status}),q.user.id]);
-  s.status(201).json({subscription:saved.rows[0],checkoutUrl:remote.short_url});
+  const c=await pool.connect();try{await c.query('BEGIN');
+   await c.query("SELECT pg_advisory_xact_lock(hashtextextended('subscription-shop:'||$1::text,0))",[q.shopId]);
+   const plan=await c.query('SELECT id,razorpay_plan_id FROM barberpro_subscription_plans WHERE id=$1 AND is_active=TRUE',[planId]);
+   if(!plan.rowCount||!plan.rows[0].razorpay_plan_id){await c.query('ROLLBACK');return s.status(404).json({error:'Active provider-backed plan not found.'});}
+   const current=await c.query("SELECT id FROM shop_subscriptions WHERE shop_id=$1 AND status IN('CREATED','AUTHENTICATED','ACTIVE','PENDING','TRIALING') FOR UPDATE",[q.shopId]);
+   if(current.rowCount){await c.query('ROLLBACK');return s.status(409).json({error:'Shop already has a current subscription.'});}
+   const remote=await provider('/subscriptions','POST',{plan_id:plan.rows[0].razorpay_plan_id,total_count:120,customer_notify:1,notes:{shopId:String(q.shopId),planId:String(planId)}});
+   const saved=await c.query("INSERT INTO shop_subscriptions(shop_id,plan_id,razorpay_subscription_id,status,short_url,provider_payload,created_by) VALUES($1,$2,$3,'CREATED',$4,$5::jsonb,$6) RETURNING id,shop_id,plan_id,status,short_url",[q.shopId,planId,remote.id,remote.short_url,JSON.stringify({id:remote.id,status:remote.status}),q.user.id]);
+   await c.query('COMMIT');s.status(201).json({subscription:saved.rows[0],checkoutUrl:remote.short_url});
+  }catch(e){await c.query('ROLLBACK').catch(()=>{});throw e;}finally{c.release();}
  }));
  r.get('/shops/:shopId/subscription',...signed,billing,wrap(async(q,s)=>{
   const found=await pool.query(`SELECT ss.*,p.code plan_code,p.name plan_name,p.billing_period,p.amount_paise,p.feature_entitlements
@@ -82,7 +86,7 @@ function createSubscriptionRouter(pool,tokenService,options={}) {
  r.get('/shops/:shopId/subscription/payments',...signed,billing,wrap(async(q,s)=>{
   const out=await pool.query('SELECT id,razorpay_payment_id,amount_paise,currency,status,failure_reason,paid_at,created_at FROM subscription_payments WHERE shop_id=$1 ORDER BY created_at DESC LIMIT 100',[q.shopId]);s.json({payments:out.rows});
  }));
- r.get('/shops/:shopId/feature-entitlements',...signed,wrap(async(q,s)=>{
+ r.get('/shops/:shopId/feature-entitlements',...signed,billing,wrap(async(q,s)=>{
   const shopId=validId(q.params.shopId);if(!shopId)return s.status(400).json({error:'Invalid shop id.'});
   const sub=await pool.query(`SELECT p.feature_entitlements FROM shop_subscriptions ss JOIN barberpro_subscription_plans p ON p.id=ss.plan_id
    WHERE ss.shop_id=$1 AND ((ss.status='ACTIVE' AND (ss.current_end IS NULL OR ss.current_end>NOW())) OR (ss.status='TRIALING' AND ss.trial_ends_at>NOW()))
@@ -101,6 +105,7 @@ function createSubscriptionRouter(pool,tokenService,options={}) {
   }catch(e){next(e);}
  },wrap(async(q,s)=>{
   const {eventId,body}=q.verifiedEvent,event=body.event||'unknown',entity=body.payload?.subscription?.entity||{},payment=body.payload?.payment?.entity||{},invoice=body.payload?.invoice?.entity||{};
+  const providerCreatedAt=Number(body.created_at||0),eventTime=Number.isFinite(providerCreatedAt)&&providerCreatedAt>0?new Date(providerCreatedAt*1000):null;
   const c=await pool.connect();try{await c.query('BEGIN');
    const inserted=await c.query('INSERT INTO subscription_webhook_events(provider_event_id,event_type,payload) VALUES($1,$2,$3::jsonb) ON CONFLICT(provider_event_id) DO NOTHING RETURNING id',[eventId,event,JSON.stringify(body)]);
    if(!inserted.rowCount){await c.query('COMMIT');return s.json({received:true,duplicate:true});}
@@ -108,20 +113,24 @@ function createSubscriptionRouter(pool,tokenService,options={}) {
    const found=subId?await c.query('SELECT * FROM shop_subscriptions WHERE razorpay_subscription_id=$1 FOR UPDATE',[subId]):{rowCount:0,rows:[]};
    if(found.rowCount){
     const sub=found.rows[0],map={'subscription.authenticated':'AUTHENTICATED','subscription.activated':'ACTIVE','subscription.charged':'ACTIVE','subscription.pending':'PENDING','subscription.halted':'HALTED','subscription.cancelled':'CANCELLED','subscription.completed':'COMPLETED'};
-    const status=map[event];
-    if(status)await c.query(`UPDATE shop_subscriptions SET status=$2,current_start=COALESCE(to_timestamp(NULLIF($3,'')::numeric),current_start),
+    const status=map[event],isFresh=!eventTime||!sub.last_webhook_created_at||eventTime>=new Date(sub.last_webhook_created_at);
+    await c.query(`INSERT INTO shop_subscription_webhook_events(event_id,event_type,razorpay_subscription_id,provider_created_at,payload)
+      VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT(event_id) DO NOTHING`,[eventId,event,subId,eventTime,JSON.stringify(body)]);
+    if(status&&isFresh)await c.query(`UPDATE shop_subscriptions SET status=$2,current_start=COALESCE(to_timestamp(NULLIF($3,'')::numeric),current_start),
       current_end=COALESCE(to_timestamp(NULLIF($4,'')::numeric),current_end),next_charge_at=COALESCE(to_timestamp(NULLIF($5,'')::numeric),next_charge_at),
-      cancelled_at=CASE WHEN $2='CANCELLED' THEN NOW() ELSE cancelled_at END,updated_at=NOW() WHERE id=$1`,
-      [sub.id,status,String(entity.current_start||''),String(entity.current_end||''),String(entity.charge_at||'')]);
-    if(event==='subscription.halted')await c.query("UPDATE shop_subscriptions SET last_payment_failed_at=NOW(),failure_count=failure_count+1,reminder_sent_at=NULL WHERE id=$1",[sub.id]);
+      cancelled_at=CASE WHEN $2='CANCELLED' THEN NOW() ELSE cancelled_at END,last_webhook_created_at=COALESCE($6,last_webhook_created_at),updated_at=NOW() WHERE id=$1`,
+      [sub.id,status,String(entity.current_start||''),String(entity.current_end||''),String(entity.charge_at||''),eventTime]);
+    if(event==='subscription.halted'&&isFresh)await c.query("UPDATE shop_subscriptions SET last_payment_failed_at=NOW(),failure_count=failure_count+1,reminder_sent_at=NULL WHERE id=$1",[sub.id]);
     if(payment.id){
-     const failed=payment.status==='failed',paid=event==='subscription.charged'||payment.status==='captured';
-     await c.query(`INSERT INTO subscription_payments(shop_id,subscription_id,razorpay_payment_id,razorpay_invoice_id,amount_paise,status,failure_reason,paid_at,provider_payload)
-      VALUES($1,$2,$3,$4,$5,$6,$7,CASE WHEN $6='CAPTURED' THEN NOW() END,$8::jsonb)
-      ON CONFLICT(razorpay_payment_id) DO UPDATE SET status=EXCLUDED.status,failure_reason=EXCLUDED.failure_reason,provider_payload=EXCLUDED.provider_payload`,
-      [sub.shop_id,sub.id,payment.id,invoice.id||null,Number(payment.amount||0),failed?'FAILED':paid?'CAPTURED':'FAILED',payment.error_description||null,JSON.stringify(payment)]);
-     if(failed)await c.query("UPDATE shop_subscriptions SET last_payment_failed_at=NOW(),failure_count=failure_count+1,reminder_sent_at=NULL WHERE id=$1",[sub.id]);
-     if(paid)await c.query("UPDATE shop_subscriptions SET last_payment_failed_at=NULL,failure_count=0,reminder_sent_at=NULL,last_payment_id=$2 WHERE id=$1",[sub.id,payment.id]);
+     const paymentStatus=String(payment.status||'').toLowerCase(),mappedPaymentStatus={captured:'CAPTURED',failed:'FAILED',refunded:'REFUNDED'}[paymentStatus];
+     if(mappedPaymentStatus){
+      await c.query(`INSERT INTO subscription_payments(shop_id,subscription_id,razorpay_payment_id,razorpay_invoice_id,amount_paise,status,failure_reason,paid_at,provider_payload)
+       VALUES($1,$2,$3,$4,$5,$6,$7,CASE WHEN $6='CAPTURED' THEN to_timestamp(NULLIF($9,'')::numeric) END,$8::jsonb)
+       ON CONFLICT(razorpay_payment_id) DO UPDATE SET status=EXCLUDED.status,failure_reason=EXCLUDED.failure_reason,paid_at=COALESCE(EXCLUDED.paid_at,subscription_payments.paid_at),provider_payload=EXCLUDED.provider_payload`,
+       [sub.shop_id,sub.id,payment.id,invoice.id||null,Math.max(0,Number(payment.amount||0)),mappedPaymentStatus,payment.error_description||null,JSON.stringify(payment),String(payment.created_at||'')]);
+      if(mappedPaymentStatus==='FAILED'&&isFresh)await c.query("UPDATE shop_subscriptions SET last_payment_failed_at=NOW(),failure_count=failure_count+1,reminder_sent_at=NULL WHERE id=$1",[sub.id]);
+      if(mappedPaymentStatus==='CAPTURED'&&isFresh)await c.query("UPDATE shop_subscriptions SET last_payment_failed_at=NULL,failure_count=0,reminder_sent_at=NULL,last_payment_id=$2 WHERE id=$1",[sub.id,payment.id]);
+     }
     }
     if(invoice.id){
      const amt=Number(invoice.amount||payment.amount||0),number=String(invoice.invoice_number||('RZP-'+invoice.id));
