@@ -4,7 +4,7 @@ const crypto=require('node:crypto');
 const {createAuthMiddleware}=require('../auth/middleware');
 
 function createSubscriptionRouter(pool,tokenService,options={}) {
- const r=express.Router(),{authenticate,requireRole}=createAuthMiddleware(pool,tokenService);
+ const r=express.Router(),{authenticate,requireRole}=options.authMiddleware||createAuthMiddleware(pool,tokenService);
  const env=options.env||process.env,fetchImpl=options.fetchImpl||global.fetch;
  const admin=[authenticate,requireRole('ADMIN')],signed=[authenticate];
  const wrap=fn=>(q,s,n)=>Promise.resolve(fn(q,s,n)).catch(n);
@@ -99,8 +99,9 @@ function createSubscriptionRouter(pool,tokenService,options={}) {
   try{
    const signature=q.get('x-razorpay-signature')||'',expected=crypto.createHmac('sha256',webhookSecret||'').update(q.rawBody||Buffer.alloc(0)).digest('hex');
    if(!webhookSecret||!equal(signature,expected))return s.status(401).json({error:'Invalid webhook signature.'});
-   const body=q.body||{},eventId=q.get('x-razorpay-event-id');
+   const body=q.body||{},eventId=q.get('x-razorpay-event-id'),createdAt=Number(body.created_at);
    if(!eventId||eventId.length>160)return s.status(400).json({error:'Missing Razorpay event id.'});
+   if(!Number.isSafeInteger(createdAt)||createdAt<=0)return s.status(400).json({error:'A valid Razorpay event timestamp is required.'});
    q.verifiedEvent={eventId,body};next();
   }catch(e){next(e);}
  },wrap(async(q,s)=>{
@@ -112,14 +113,15 @@ function createSubscriptionRouter(pool,tokenService,options={}) {
    const subId=entity.id||payment.subscription_id||invoice.subscription_id;
    const found=subId?await c.query('SELECT * FROM shop_subscriptions WHERE razorpay_subscription_id=$1 FOR UPDATE',[subId]):{rowCount:0,rows:[]};
    if(found.rowCount){
-    const sub=found.rows[0],map={'subscription.authenticated':'AUTHENTICATED','subscription.activated':'ACTIVE','subscription.charged':'ACTIVE','subscription.pending':'PENDING','subscription.halted':'HALTED','subscription.cancelled':'CANCELLED','subscription.completed':'COMPLETED'};
-    const status=map[event],isFresh=!eventTime||!sub.last_webhook_created_at||eventTime>=new Date(sub.last_webhook_created_at);
+    const sub=found.rows[0],map={'subscription.authenticated':'AUTHENTICATED','subscription.activated':'ACTIVE','subscription.charged':'ACTIVE','subscription.pending':'PENDING','subscription.halted':'HALTED','subscription.cancelled':'CANCELLED','subscription.completed':'EXPIRED','subscription.expired':'EXPIRED'};
+    const status=map[event],isFresh=!eventTime||!sub.last_webhook_created_at||eventTime>new Date(sub.last_webhook_created_at);
     await c.query(`INSERT INTO shop_subscription_webhook_events(event_id,event_type,razorpay_subscription_id,provider_created_at,payload)
       VALUES($1,$2,$3,$4,$5::jsonb) ON CONFLICT(event_id) DO NOTHING`,[eventId,event,subId,eventTime,JSON.stringify(body)]);
     if(status&&isFresh)await c.query(`UPDATE shop_subscriptions SET status=$2,current_start=COALESCE(to_timestamp(NULLIF($3,'')::numeric),current_start),
       current_end=COALESCE(to_timestamp(NULLIF($4,'')::numeric),current_end),next_charge_at=COALESCE(to_timestamp(NULLIF($5,'')::numeric),next_charge_at),
       cancelled_at=CASE WHEN $2='CANCELLED' THEN NOW() ELSE cancelled_at END,last_webhook_created_at=COALESCE($6,last_webhook_created_at),updated_at=NOW() WHERE id=$1`,
       [sub.id,status,String(entity.current_start||''),String(entity.current_end||''),String(entity.charge_at||''),eventTime]);
+    else if(isFresh&&eventTime)await c.query('UPDATE shop_subscriptions SET last_webhook_created_at=$2,updated_at=NOW() WHERE id=$1',[sub.id,eventTime]);
     if(event==='subscription.halted'&&isFresh)await c.query("UPDATE shop_subscriptions SET last_payment_failed_at=NOW(),failure_count=failure_count+1,reminder_sent_at=NULL WHERE id=$1",[sub.id]);
     if(payment.id){
      const paymentStatus=String(payment.status||'').toLowerCase(),mappedPaymentStatus={captured:'CAPTURED',failed:'FAILED',refunded:'REFUNDED'}[paymentStatus];
@@ -149,28 +151,41 @@ function createSubscriptionRouter(pool,tokenService,options={}) {
  r.post('/shops/:shopId/subscription/reconcile',...signed,billing,wrap(async(q,s)=>{
   const current=await pool.query("SELECT * FROM shop_subscriptions WHERE shop_id=$1 AND razorpay_subscription_id IS NOT NULL ORDER BY created_at DESC LIMIT 1",[q.shopId]);
   if(!current.rowCount)return s.status(404).json({error:'No Razorpay subscription found for this shop.'});
-  const sub=current.rows[0],invoices=await provider('/invoices?subscription_id='+encodeURIComponent(sub.razorpay_subscription_id));
-  let paymentCount=0,invoiceCount=0;
-  for(const inv of invoices.items||[]){
+  const sub=current.rows[0],allInvoices=[];let skip=0;
+  for(let page=0;page<100;page++){
+   const result=await provider('/invoices?subscription_id='+encodeURIComponent(sub.razorpay_subscription_id)+'&count=100&skip='+skip);
+   const items=Array.isArray(result.items)?result.items:[];
+   allInvoices.push(...items);if(items.length<100)break;skip+=items.length;
+   if(page===99)throw Object.assign(new Error('Razorpay invoice pagination exceeded the safety limit.'),{status:502});
+  }
+  const normalized=[];
+  for(const inv of allInvoices){
    if(!inv.id)continue;
-   if(inv.payment_id){
-    const payment=await provider('/payments/'+encodeURIComponent(inv.payment_id));
-    if(payment.id&&['captured','failed'].includes(payment.status)){
-     await pool.query(`INSERT INTO subscription_payments(shop_id,subscription_id,razorpay_payment_id,razorpay_invoice_id,amount_paise,status,failure_reason,paid_at,provider_payload)
-      VALUES($1,$2,$3,$4,$5,$6,$7,CASE WHEN $6='CAPTURED' THEN to_timestamp($8) END,$9::jsonb)
+   let payment=null;
+   if(inv.payment_id)payment=await provider('/payments/'+encodeURIComponent(inv.payment_id));
+   const paymentStatus=String(payment?.status||'').toLowerCase();
+   normalized.push({inv,payment,paymentStatus});
+  }
+  const c=await pool.connect();let paymentCount=0,invoiceCount=0;
+  try{await c.query('BEGIN');await c.query("SELECT id FROM shop_subscriptions WHERE id=$1 FOR UPDATE",[sub.id]);
+   for(const {inv,payment,paymentStatus} of normalized){
+    if(payment?.id&&['captured','failed','refunded'].includes(paymentStatus)){
+     const mapped={captured:'CAPTURED',failed:'FAILED',refunded:'REFUNDED'}[paymentStatus];
+     await c.query(`INSERT INTO subscription_payments(shop_id,subscription_id,razorpay_payment_id,razorpay_invoice_id,amount_paise,status,failure_reason,paid_at,provider_payload)
+      VALUES($1,$2,$3,$4,$5,$6,$7,CASE WHEN $6='CAPTURED' THEN to_timestamp(NULLIF($8,'')::numeric) END,$9::jsonb)
       ON CONFLICT(razorpay_payment_id) DO UPDATE SET status=EXCLUDED.status,failure_reason=EXCLUDED.failure_reason,paid_at=COALESCE(EXCLUDED.paid_at,subscription_payments.paid_at),provider_payload=EXCLUDED.provider_payload`,
-      [sub.shop_id,sub.id,payment.id,inv.id,Number(payment.amount||inv.amount||0),payment.status==='captured'?'CAPTURED':'FAILED',payment.error_description||null,payment.created_at||null,JSON.stringify(payment)]);
+      [sub.shop_id,sub.id,payment.id,inv.id,Math.max(0,Number(payment.amount||inv.amount||0)),mapped,payment.error_description||null,String(payment.created_at||''),JSON.stringify(payment)]);
      paymentCount++;
     }
+    const invoiceStatus=inv.status==='paid'?'PAID':['cancelled','expired'].includes(inv.status)?'VOID':'ISSUED';
+    await c.query(`INSERT INTO subscription_invoices(shop_id,subscription_id,provider_invoice_id,invoice_number,amount_paise,status,paid_at,receipt_url,invoice_payload)
+     VALUES($1,$2,$3,$4,$5,$6,CASE WHEN $6='PAID' THEN to_timestamp(NULLIF($7,'')::numeric) END,$8,$9::jsonb)
+     ON CONFLICT(provider_invoice_id) DO UPDATE SET status=EXCLUDED.status,paid_at=COALESCE(EXCLUDED.paid_at,subscription_invoices.paid_at),receipt_url=COALESCE(EXCLUDED.receipt_url,subscription_invoices.receipt_url),invoice_payload=EXCLUDED.invoice_payload`,
+     [sub.shop_id,sub.id,inv.id,String(inv.invoice_number||('RZP-'+inv.id)),Math.max(0,Number(inv.amount||0)),invoiceStatus,String(inv.paid_at||''),inv.short_url||null,JSON.stringify(inv)]);
+    invoiceCount++;
    }
-   const invoiceNumber=String(inv.invoice_number||('RZP-'+inv.id)),invoiceStatus=inv.status==='paid'?'PAID':['cancelled','expired'].includes(inv.status)?'VOID':'ISSUED';
-   await pool.query(`INSERT INTO subscription_invoices(shop_id,subscription_id,provider_invoice_id,invoice_number,amount_paise,status,paid_at,receipt_url,invoice_payload)
-    VALUES($1,$2,$3,$4,$5,$6,CASE WHEN $6='PAID' THEN to_timestamp($7) END,$8,$9::jsonb)
-    ON CONFLICT(provider_invoice_id) DO UPDATE SET status=EXCLUDED.status,paid_at=COALESCE(EXCLUDED.paid_at,subscription_invoices.paid_at),receipt_url=COALESCE(EXCLUDED.receipt_url,subscription_invoices.receipt_url),invoice_payload=EXCLUDED.invoice_payload`,
-    [sub.shop_id,sub.id,inv.id,invoiceNumber,Number(inv.amount||0),invoiceStatus,inv.paid_at||null,inv.short_url||null,JSON.stringify(inv)]);
-   invoiceCount++;
-  }
-  s.json({reconciled:true,payments:paymentCount,invoices:invoiceCount});
+   await c.query('COMMIT');s.json({reconciled:true,payments:paymentCount,invoices:invoiceCount,pages:Math.ceil(allInvoices.length/100)});
+  }catch(e){await c.query('ROLLBACK').catch(()=>{});throw e;}finally{c.release();}
  }));
  return r;
 }
