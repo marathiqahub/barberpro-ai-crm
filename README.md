@@ -87,7 +87,7 @@ Registration accepts `name`, `email`, and `password`. Passwords must be 12–128
 
 Passwords are hashed with Argon2id. Access JWTs expire after 15 minutes. Refresh JWTs expire after 7 days, are stored in the database only as SHA-256 hashes, rotate on every successful refresh, and share a family identifier so replay of a revoked token revokes the active family. Access JWTs are bound to that family too, and middleware checks the family is still active, so logout and detected refresh-token replay invalidate access tokens immediately. Access and refresh JWTs use different secrets and are verified with a fixed HS256 algorithm, issuer, and audience. Tokens contain identifiers and role metadata only; do not put secrets or sensitive personal data in JWT claims.
 
-Send access tokens as `Authorization: Bearer <accessToken>`. Send the current refresh token in the JSON body to `/refresh` and `/logout`. Treat refresh tokens as credentials: keep them in secure client-side storage (or, for browser applications, preferably a backend-for-frontend using Secure, HttpOnly, SameSite cookies and appropriate CSRF protections). Always use HTTPS outside local development. Login, registration, and refresh endpoints have per-IP rate limits; the default in-memory limiter is per process, so use a shared store when deploying multiple API instances and configure Express proxy trust carefully behind a reverse proxy.
+Browser workspaces use Secure (production), HttpOnly, SameSite=Lax access and refresh cookies with CSRF validation on state-changing requests. Browser JavaScript never receives the tokens. Non-browser API clients may continue sending `Authorization: Bearer <accessToken>`; refresh/logout use the cookie session and `X-CSRF-Token`. Always use HTTPS outside local development. Login, registration, and refresh endpoints have per-IP rate limits; the default in-memory limiter is per process, so use a shared store when deploying multiple API instances and configure Express proxy trust carefully behind a reverse proxy.
 
 Example registration:
 
@@ -161,7 +161,7 @@ The browser application is served from `/`. Sign in with a CUSTOMER, BARBER or A
 
 Apply `db/migrations/004_create_payment_tables.sql` after migration 003. Configure `RAZORPAY_KEY_ID`, `RAZORPAY_KEY_SECRET` and `RAZORPAY_WEBHOOK_SECRET` in the deployment secret manager. Register `https://YOUR_HOST/api/payments/webhook` with Razorpay for `payment.captured`, `payment.failed`, `refund.processed` and `refund.failed`. Checkout and webhook signatures are verified server-side; webhook event IDs are idempotent. Admin reconciliation is `GET /api/payments/reconciliation`; refunds use `POST /api/payments/:paymentId/refunds`. Never expose secret credentials to browsers. Checkout remains disabled until credentials are configured.
 
-The initial SPA stores bearer tokens in local storage. Before production, move browser authentication behind a same-origin backend-for-frontend using Secure, HttpOnly, SameSite cookies and CSRF protection.
+Browser authentication is now cookie-based: access/refresh tokens are Secure in production, HttpOnly and SameSite=Lax; mutating requests require the CSRF token header. Clear any previously stored `bp_access` and `bp_refresh` localStorage values in existing browsers after rollout.
 
 ## Phase 5: AI receptionist and business intelligence
 
@@ -229,3 +229,12 @@ No DNS, domain purchase, Render custom-domain, environment-variable, account, or
 ## SaaS subscription model
 
 BarberPro shop subscriptions, Razorpay plan setup, 14-day trials, cancellation, webhook configuration and feature entitlements are documented in [docs/subscription-model.md](docs/subscription-model.md). Migrations `033_subscription_trial_lifecycle.sql` and `035_subscription_webhook_safety.sql` add trial lifecycle and webhook safety state. Existing shops without subscription records retain legacy access during rollout.
+
+
+## Subscription commercial readiness
+
+Subscription endpoints, shop-scoped SHOP_OWNER/BILLING_ADMIN memberships, signed Razorpay subscription webhook handling, webhook idempotency, provider payment/invoice records, renewal-failure email notices and server-side advanced-feature gates are documented in [docs/subscription-model.md](docs/subscription-model.md). Apply migration 035 using `npm run db:migrate`. Run PostgreSQL-backed integration tests with `TEST_DATABASE_URL` or use the CI PostgreSQL workflow.
+
+### Database backup and restore drill
+
+Use `npm run db:backup` with `DATABASE_URL` set to create a private custom-format `pg_dump` and SHA-256 checksum. Test restoration only into a separate disposable database with `RESTORE_DATABASE_URL` and `BACKUP_FILE` set using `npm run db:restore:test`. The restore script refuses to target the same URL as `DATABASE_URL`. Store backups encrypted and off-host, restrict access, define retention, and record periodic isolated restore drills. Never run the restore script against production.

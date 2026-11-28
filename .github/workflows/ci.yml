@@ -24,6 +24,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
+      DATABASE_URL: postgres://barberpro:barberpro@localhost:5432/barberpro_test
       TEST_DATABASE_URL: postgres://barberpro:barberpro@localhost:5432/barberpro_test
     steps:
       - uses: actions/checkout@v4
@@ -31,5 +32,6 @@ jobs:
         with:
           node-version: 22
       - run: npm install --no-audit --no-fund
+      - run: npm run db:migrate
       - run: npm run check
       - run: npm test
