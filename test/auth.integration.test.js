@@ -102,13 +102,15 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     assert.equal(ready, true, `API did not become ready. Output: ${serverOutput}`);
 
     const sessions = new Map();
-    async function request(route, { method = 'GET', body, token } = {}) {
+    async function request(route, { method = 'GET', body, token, csrf = true } = {}) {
       const headers = {};
       if (body !== undefined) headers['content-type'] = 'application/json';
       const session = token ? sessions.get(token) : null;
       if (session) {
         headers.cookie = session.cookie;
-        if (route.endsWith('/refresh') || route.endsWith('/logout')) headers['x-csrf-token'] = session.csrf;
+        if (csrf && !['GET', 'HEAD', 'OPTIONS'].includes(method.toUpperCase())) {
+          headers['x-csrf-token'] = session.csrf;
+        }
       }
       const response = await fetch(`${baseUrl}${route}`, {
         method, headers, body: body === undefined ? undefined : JSON.stringify(body)
@@ -123,7 +125,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
         const csrfCookie = values.find(value => value.startsWith('bp_csrf='));
         sessions.set(parsed.user.email, { cookie, csrf: csrfCookie?.slice('bp_csrf='.length) || '' });
       }
-      return { status: response.status, body: parsed };
+      return { status: response.status, body: parsed, setCookies };
     }
 
     const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -140,6 +142,21 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     assert.equal(registered.body.user.role, 'CUSTOMER');
     assert.equal(registered.body.authenticated, true);
     assert.ok(sessions.has(emailA));
+    const accessCookie = registered.setCookies.find(value => value.startsWith('bp_access='));
+    const refreshCookie = registered.setCookies.find(value => value.startsWith('bp_refresh='));
+    const csrfCookie = registered.setCookies.find(value => value.startsWith('bp_csrf='));
+    assert.match(accessCookie || '', /; HttpOnly/i);
+    assert.match(refreshCookie || '', /; HttpOnly/i);
+    assert.doesNotMatch(csrfCookie || '', /; HttpOnly/i);
+    assert.match(accessCookie || '', /; SameSite=Lax/i);
+    assert.match(refreshCookie || '', /; SameSite=Lax/i);
+
+    // Cookie-authenticated unsafe requests must include the readable CSRF token.
+    const csrfRejected = await request('/api/shops', {
+      method: 'POST', token: emailA, csrf: false,
+      body: { name: 'CSRF blocked shop', slug: `csrf-blocked-${suffix}`, timezone: 'Asia/Kolkata' }
+    });
+    assert.equal(csrfRejected.status, 403);
 
     const storedUser = await pool.query('SELECT password_hash FROM users WHERE email = $1', [emailA]);
     assert.match(storedUser.rows[0].password_hash, /^\$argon2id\$/);
