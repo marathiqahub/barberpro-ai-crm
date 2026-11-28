@@ -99,8 +99,9 @@ function createSubscriptionRouter(pool,tokenService,options={}) {
   try{
    const signature=q.get('x-razorpay-signature')||'',expected=crypto.createHmac('sha256',webhookSecret||'').update(q.rawBody||Buffer.alloc(0)).digest('hex');
    if(!webhookSecret||!equal(signature,expected))return s.status(401).json({error:'Invalid webhook signature.'});
-   const body=q.body||{},eventId=q.get('x-razorpay-event-id');
+   const body=q.body||{},eventId=q.get('x-razorpay-event-id'),createdAt=Number(body.created_at);
    if(!eventId||eventId.length>160)return s.status(400).json({error:'Missing Razorpay event id.'});
+   if(!Number.isSafeInteger(createdAt)||createdAt<=0)return s.status(400).json({error:'A valid Razorpay event timestamp is required.'});
    q.verifiedEvent={eventId,body};next();
   }catch(e){next(e);}
  },wrap(async(q,s)=>{
