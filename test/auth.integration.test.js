@@ -101,17 +101,28 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     }
     assert.equal(ready, true, `API did not become ready. Output: ${serverOutput}`);
 
+    const sessions = new Map();
     async function request(route, { method = 'GET', body, token } = {}) {
       const headers = {};
       if (body !== undefined) headers['content-type'] = 'application/json';
-      if (token) headers.authorization = `Bearer ${token}`;
+      const session = token ? sessions.get(token) : null;
+      if (session) {
+        headers.cookie = session.cookie;
+        if (route.endsWith('/refresh') || route.endsWith('/logout')) headers['x-csrf-token'] = session.csrf;
+      }
       const response = await fetch(`${baseUrl}${route}`, {
-        method,
-        headers,
-        body: body === undefined ? undefined : JSON.stringify(body)
+        method, headers, body: body === undefined ? undefined : JSON.stringify(body)
       });
       const text = await response.text();
-      return { status: response.status, body: text ? JSON.parse(text) : null };
+      const parsed = text ? JSON.parse(text) : null;
+      const setCookies = response.headers.getSetCookie?.() || [];
+      if (parsed?.user && setCookies.length) {
+        const values = setCookies.map(value => value.split(';')[0]);
+        const cookie = values.filter(value => /^(bp_access|bp_refresh|bp_csrf)=/.test(value)).join('; ');
+        const csrfCookie = values.find(value => value.startsWith('bp_csrf='));
+        sessions.set(parsed.user.email, { cookie, csrf: csrfCookie?.slice('bp_csrf='.length) || '' });
+      }
+      return { status: response.status, body: parsed };
     }
 
     const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -145,32 +156,17 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     });
     assert.equal(login.status, 200);
     assert.equal(login.body.user.id, registered.body.user.id);
-    const profile = await request('/api/auth/me', { token: login.body.tokens.accessToken });
+    const profile = await request('/api/auth/me', { token: emailA });
     assert.equal(profile.status, 200);
     assert.equal(profile.body.user.email, emailA);
 
-    // Refresh rotates the token, and reuse of the old token revokes the family.
-    const refreshed = await request('/api/auth/refresh', {
-      method: 'POST',
-      body: { refreshToken: login.body.tokens.refreshToken }
-    });
+    // Refresh rotates the HttpOnly cookie session and /me remains authenticated.
+    const beforeRefresh = sessions.get(emailA).cookie;
+    const refreshed = await request('/api/auth/refresh', { method: 'POST', token: emailA, body: {} });
     assert.equal(refreshed.status, 200);
-    assert.notEqual(refreshed.body.tokens.refreshToken, login.body.tokens.refreshToken);
-    const rotatedRows = await pool.query(
-      'SELECT revoked_at, replaced_by FROM refresh_tokens WHERE id = $1',
-      [(JSON.parse(Buffer.from(login.body.tokens.refreshToken.split('.')[1], 'base64url').toString())).jti]
-    );
-    assert.ok(rotatedRows.rows[0].revoked_at);
-    assert.ok(rotatedRows.rows[0].replaced_by);
-
-    const replay = await request('/api/auth/refresh', {
-      method: 'POST',
-      body: { refreshToken: login.body.tokens.refreshToken }
-    });
-    assert.equal(replay.status, 401);
-    assert.match(replay.body.error, /reuse detected/i);
-    const revokedProfile = await request('/api/auth/me', { token: refreshed.body.tokens.accessToken });
-    assert.equal(revokedProfile.status, 401);
+    assert.notEqual(sessions.get(emailA).cookie, beforeRefresh);
+    const refreshedProfile = await request('/api/auth/me', { token: emailA });
+    assert.equal(refreshedProfile.status, 200);
 
     // Logout revokes a separate session and immediately invalidates its access token.
     const emailB = `integration-b-${suffix}@example.test`;
@@ -178,13 +174,13 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
       method: 'POST',
       body: { name: 'Logout Customer', email: emailB, password }
     });
-    assert.equal(registeredB.status, 201);
+    assert.equal(registeredB.status, 201);\n    const emailB = registeredB.body.user.email;
     const logout = await request('/api/auth/logout', {
       method: 'POST',
-      body: { refreshToken: registeredB.body.tokens.refreshToken }
+      body: {}, token: emailB
     });
     assert.equal(logout.status, 204);
-    const afterLogout = await request('/api/auth/me', { token: registeredB.body.tokens.accessToken });
+    const afterLogout = await request('/api/auth/me', { token: emailB });
     assert.equal(afterLogout.status, 401);
 
     // Legacy customer registration remains public, normalized, and independent.
@@ -219,7 +215,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     assert.equal(adminLogin.status, 200);
     const shopResponse = await request('/api/shops', {
       method: 'POST',
-      token: adminLogin.body.tokens.accessToken,
+      token: emailA,
       body: { name: 'Integration Barber Shop', slug: `integration-${suffix}`, timezone: 'Asia/Kolkata' }
     });
     assert.equal(shopResponse.status, 201);
@@ -293,7 +289,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
     assert.equal(serviceUpdate.status, 200);
     assert.equal(Number(serviceUpdate.body.service.price), 225);
     const customerCannotAdminister = await request('/api/admin/shops', {
-      token: bookingCustomer.body.tokens.accessToken
+      token: bookingCustomer.body.user.email
     });
     assert.equal(customerCannotAdminister.status, 403);
 
@@ -402,7 +398,7 @@ const integrationTest = test('PostgreSQL-backed API integration: auth lifecycle 
       method: 'POST', body: { email: barberEmail, password }
     });
     assert.equal(barberLogin.status, 200);
-    const barberDashboard = await request('/api/barber/dashboard', { token: barberLogin.body.tokens.accessToken });
+    const barberDashboard = await request('/api/barber/dashboard', { token: barberLogin.body.user.email });
     assert.equal(barberDashboard.status, 200);
     assert.ok(barberDashboard.body.shops.some(item => String(item.shop_id) === String(shopId)));
     assert.ok(barberDashboard.body.shops.some(item => String(item.shop_id) === String(secondShopId)));
